@@ -1,0 +1,5 @@
+{
+  "table_name": "aws-fb-db-dynamo",
+  "bucket_name": "aws-fb-db-s3",
+  "region": "ap-northeast-1"
+}
