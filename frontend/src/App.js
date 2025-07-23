@@ -4,11 +4,16 @@ import { ChevronDown, Plus, Search, User, LogOut, MapPin, Clock, MessageSquare, 
 // Auth Context
 const AuthContext = createContext();
 
+
 const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [token, setToken] = useState(localStorage.getItem('token'));
   const [isAdmin, setIsAdmin] = useState(localStorage.getItem('isAdmin') === 'true');
-
+  const [showLogoutModal, setShowLogoutModal] = useState(false);
+  const [showTermsModal, setShowTermsModal] = useState(false);
+  const [termsContent, setTermsContent] = useState('');
+  const [hasAcceptedTerms, setHasAcceptedTerms] = useState(false);
+  
   useEffect(() => {
     if (token) {
       const userData = localStorage.getItem('user');
@@ -25,21 +30,127 @@ const AuthProvider = ({ children }) => {
     localStorage.setItem('token', authToken);
     localStorage.setItem('user', JSON.stringify(userData));
     localStorage.setItem('isAdmin', adminStatus.toString());
+    
+    // ✅ NEW: Check if user has accepted terms (only for regular users)
+    if (!adminStatus) {
+      const acceptedTerms = localStorage.getItem(`terms_accepted_${userData.user_id}`);
+      if (!acceptedTerms) {
+        // First-time user - show terms
+        fetchTermsContent();
+        setShowTermsModal(true);
+      }
+    }
   };
 
+// Add these functions after the login function
+const fetchTermsContent = async () => {
+  try {
+    const response = await fetch(`${API_BASE}/terms-content`);
+    const result = await response.json();
+    setTermsContent(result.content || 'Default Terms and Conditions content...');
+  } catch (error) {
+    console.error('Error fetching terms:', error);
+    setTermsContent('By using this app, you agree to our terms and conditions.');
+  }
+};
+
+const acceptTerms = () => {
+  localStorage.setItem(`terms_accepted_${user.user_id}`, 'true');
+  setShowTermsModal(false);
+  setHasAcceptedTerms(true);
+};
+
+const declineTerms = () => {
+  // Log them out if they decline
+  confirmLogout();
+};
+
   const logout = () => {
+    setShowLogoutModal(true); // Show custom modal instead of browser popup
+  };
+  
+  const confirmLogout = () => {
     setUser(null);
     setToken(null);
     setIsAdmin(false);
     localStorage.removeItem('token');
     localStorage.removeItem('user');
     localStorage.removeItem('isAdmin');
+    setShowLogoutModal(false); // ✅ Added missing part
+  };
+
+
+  
+  const cancelLogout = () => { // ✅ Added missing function
+    setShowLogoutModal(false);
   };
 
   return (
-    <AuthContext.Provider value={{ user, token, isAdmin, login, logout }}>
-      {children}
-    </AuthContext.Provider>
+    <>
+        <AuthContext.Provider value={{ 
+          user, token, isAdmin, login, logout, confirmLogout, cancelLogout, showLogoutModal,
+          showTermsModal, setShowTermsModal
+        }}>
+        {children}
+      </AuthContext.Provider>
+      
+      {showLogoutModal && ( // ✅ Moved inside return statement
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 max-w-sm w-full mx-4 shadow-xl">
+            <div className="flex items-center mb-4">
+              <LogOut className="w-6 h-6 text-red-500 mr-3" />
+              <h3 className="text-lg font-semibold text-gray-800">Confirm Logout</h3>
+            </div>
+            <p className="text-gray-600 mb-6">Are you sure you want to log out? You'll need to sign in again to access your account.</p>
+            <div className="flex space-x-3">
+              <button
+                onClick={confirmLogout}
+                className="flex-1 bg-red-600 text-white py-2 px-4 rounded-lg hover:bg-red-700 transition-colors"
+              >
+                Yes, Log Out
+              </button>
+              <button
+                onClick={cancelLogout}
+                className="flex-1 bg-gray-300 text-gray-700 py-2 px-4 rounded-lg hover:bg-gray-400 transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+        
+      )}
+        {showTermsModal && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+            <div className="bg-white rounded-lg p-6 max-w-lg w-full mx-4 shadow-xl max-h-[80vh] overflow-y-auto">
+              <div className="flex items-center mb-4">
+                <Shield className="w-6 h-6 text-green-600 mr-3" />
+                <h3 className="text-lg font-semibold text-gray-800">Terms and Conditions</h3>
+              </div>
+              <div className="mb-6 p-4 bg-gray-50 rounded-lg max-h-60 overflow-y-auto">
+                <p className="text-gray-700 whitespace-pre-wrap">{termsContent}</p>
+              </div>
+              <p className="text-sm text-gray-600 mb-6">
+                You must accept these terms and conditions to continue using Eco Pantry.
+              </p>
+              <div className="flex space-x-3">
+                <button
+                  onClick={acceptTerms}
+                  className="flex-1 bg-green-600 text-white py-2 px-4 rounded-lg hover:bg-green-700 transition-colors"
+                >
+                  I Accept
+                </button>
+                <button
+                  onClick={declineTerms}
+                  className="flex-1 bg-gray-300 text-gray-700 py-2 px-4 rounded-lg hover:bg-gray-400 transition-colors"
+                >
+                  Decline
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+    </>
   );
 };
 
@@ -175,6 +286,21 @@ const apiService = {
     return response.json();
   },
 
+  deleteUser: async (googleId, token) => {
+    try {
+      const response = await fetch(`${API_BASE}/admin/users/${googleId}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.detail || 'Failed to delete user');
+      return result;
+    } catch (error) {
+      console.error('Delete user error:', error);
+      throw error;
+    }
+  },
+
   getPendingItems: async (token) => {
     const response = await fetch(`${API_BASE}/admin/items/pending`, {
       headers: { 'Authorization': `Bearer ${token}` }
@@ -219,7 +345,51 @@ const apiService = {
     });
     return response.json();
   },
+  deleteLocation: async (locationId, token) => {
+    try {
+      const response = await fetch(`${API_BASE}/admin/locations/${locationId}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.detail || 'Failed to delete location');
+      return result;
+    } catch (error) {
+      console.error('Delete location error:', error);
+      throw error;
+    }
+  },
 
+  getTermsContent: async () => {
+    try {
+      const response = await fetch(`${API_BASE}/terms-content`);
+      const result = await response.json();
+      return result;
+    } catch (error) {
+      console.error('Get terms error:', error);
+      throw error;
+    }
+  },
+  
+  updateTermsContent: async (content, token) => {
+    try {
+      const response = await fetch(`${API_BASE}/admin/terms-content`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ content })
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.detail || 'Failed to update terms');
+      return result;
+    } catch (error) {
+      console.error('Update terms error:', error);
+      throw error;
+    }
+  },
+  
   getCategories: async () => {
     const response = await fetch(`${API_BASE}/categories`);
     return response.json();
@@ -925,7 +1095,7 @@ const UserDashboard = () => {
   const [chatState, setChatState] = useState({});
   const [chatMessages, setChatMessages] = useState({});
   const [newMessages, setNewMessages] = useState({});
-
+  const [showSuccessModal, setShowSuccessModal] = useState(false);
   // FIXED: Enhanced loadData with better error handling and logging
   const loadData = React.useCallback(async () => {
     console.log('🔄 Loading data... User:', user?.email, 'Token:', !!token);
@@ -1044,13 +1214,16 @@ const UserDashboard = () => {
       const result = await apiService.createItem(formData, token);
       console.log('✅ Item added:', result);
       setShowModal(false);
-      await loadData(); // Reload data
+      
+      // ✅ NEW: Show custom success modal instead of alert
+      setShowSuccessModal(true);
+      
+      await loadData();
     } catch (error) {
       console.error('❌ Error adding item:', error);
       alert('Failed to add item: ' + error.message);
     }
   };
-
   const handleEditItem = async (formData) => {
     try {
       console.log('✏️ Editing item:', editingItem?.item_id, formData);
@@ -1314,6 +1487,27 @@ const UserDashboard = () => {
         locations={locations}
         categories={categories}
       />
+        {showSuccessModal && (
+            <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+              <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4 shadow-xl">
+                <div className="flex items-center mb-4">
+                  <div className="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center mr-4">
+                    <Check className="w-6 h-6 text-green-600" />
+                  </div>
+                  <h3 className="text-lg font-semibold text-gray-800">Item Submitted Successfully!</h3>
+                </div>
+                <p className="text-gray-600 mb-6">Your item is now in line for approval. You will be notified once an admin reviews and approves your submission.</p>
+                <div className="flex justify-end">
+                  <button
+                    onClick={() => setShowSuccessModal(false)}
+                    className="bg-green-600 text-white py-2 px-6 rounded-lg hover:bg-green-700 transition-colors"
+                  >
+                    Got it, thanks!
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
     </div>
   );
 };
@@ -1331,6 +1525,9 @@ const AdminDashboard = () => {
   const [loading, setLoading] = useState(true);
   const [showLocationModal, setShowLocationModal] = useState(false);
   const [newLocation, setNewLocation] = useState({ name: '', description: '' });
+  const [currentTerms, setCurrentTerms] = useState('');
+  const [editingTerms, setEditingTerms] = useState('');
+  const [savingTerms, setSavingTerms] = useState(false);
 
   // FIXED: Enhanced loadData with better error handling
   const loadData = React.useCallback(async () => {
@@ -1338,23 +1535,36 @@ const AdminDashboard = () => {
     setLoading(true);
     
     try {
+      // ✅ NEW: Always load users data for tab count display
+      const usersDataPromise = apiService.getUsers(token);
+      
       if (activeTab === 'pending') {
         console.log('📋 Loading pending items...');
-        const items = await apiService.getPendingItems(token);
+        const [items, usersData, locationsData] = await Promise.all([
+          apiService.getPendingItems(token),
+          usersDataPromise,
+          apiService.getLocations()
+        ]);
         console.log('📊 Pending items loaded:', items?.length || 0);
         setPendingItems(Array.isArray(items) ? items : []);
+        setUsers(Array.isArray(usersData) ? usersData : []); 
+        setLocations(Array.isArray(locationsData) ? locationsData : []);
         
       } else if (activeTab === 'users') {
         console.log('👥 Loading users...');
-        const usersData = await apiService.getUsers(token);
+        const usersData = await usersDataPromise;
         console.log('📊 Users loaded:', usersData?.length || 0);
         setUsers(Array.isArray(usersData) ? usersData : []);
         
       } else if (activeTab === 'locations') {
         console.log('📍 Loading locations...');
-        const locationsData = await apiService.getLocations();
+        const [locationsData, usersData] = await Promise.all([
+          apiService.getLocations(),
+          usersDataPromise
+        ]);
         console.log('📊 Locations loaded:', locationsData?.length || 0);
         setLocations(Array.isArray(locationsData) ? locationsData : []);
+        setUsers(Array.isArray(usersData) ? usersData : []); // ✅ Set users for count
       }
       
       console.log('✅ Admin data loaded successfully');
@@ -1449,6 +1659,43 @@ const AdminDashboard = () => {
     }
   };
 
+// Add delete user function with safety checks
+  const handleDeleteUser = async (googleId, userName) => {
+    // First confirmation
+    if (!window.confirm(`⚠️ DANGER: This will permanently delete "${userName}" and ALL their items!\n\nThis action CANNOT be undone. Are you absolutely sure?`)) {
+      return;
+    }
+
+    // Second confirmation - must type exact text
+    const confirmText = prompt(`To confirm deletion, type exactly: DELETE ${userName}`);
+    if (confirmText !== `DELETE ${userName}`) {
+      alert('Deletion cancelled - confirmation text did not match.');
+      return;
+    }
+
+    try {
+      console.log('🗑️ Permanently deleting user:', googleId, userName);
+      
+      // Remove user from UI immediately
+      setUsers(prev => prev.filter(user => (user.google_id || user.user_id) !== googleId));
+      
+      // Try backend deletion
+      try {
+        const result = await apiService.deleteUser(googleId, token);
+        alert(`User "${userName}" deleted with ${result.deleted_items || 0} items.`);
+      } catch (error) {
+        alert(`User "${userName}" removed from interface.`);
+      }
+      
+      // ✅ FORCE RELOAD USERS FROM BACKEND
+      await loadData();
+      
+    } catch (error) {
+      console.error('❌ Error:', error);
+    }
+  };
+  
+
   // FIXED: Enhanced location creation with validation
   const handleAddLocation = async (e) => {
     e.preventDefault();
@@ -1488,7 +1735,28 @@ const AdminDashboard = () => {
       alert('Failed to add location: ' + error.message);
     }
   };
+  const handleDeleteLocation = async (locationId, locationName) => {
+    if (!window.confirm(`Are you sure you want to delete "${locationName}"? This action cannot be undone.`)) {
+      return;
+    }
+  
+    try {
+      console.log('🗑️ Deleting location:', locationId);
+      await apiService.deleteLocation(locationId, token);
+      console.log('✅ Location deleted successfully');
+      
+      // Remove from list immediately for better UX
+      setLocations(prev => prev.filter(loc => loc.location_id !== locationId));
+      
+      // Also reload data to be sure
+      await loadData();
+    } catch (error) {
+      console.error('❌ Error deleting location:', error);
+      alert('Failed to delete location: ' + error.message);
+    }
+  };
 
+   
   // Loading state
   if (loading) {
     return (
@@ -1556,6 +1824,15 @@ const AdminDashboard = () => {
             >
               Locations ({locations.length})
             </button>
+            
+            <button
+            onClick={() => setActiveTab('terms')}
+            className={`flex-1 py-2 px-4 rounded-md font-medium transition-colors ${
+              activeTab === 'terms' ? 'bg-white text-green-700 shadow-sm' : 'text-gray-600 hover:text-gray-800'
+            }`}
+          >
+            Terms & Conditions
+          </button>
           </div>
         </div>
 
@@ -1669,15 +1946,26 @@ const AdminDashboard = () => {
                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                           {userData.last_login ? new Date(userData.last_login).toLocaleString() : 'Never'}
                         </td>
+
                         <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                          <button
-                            onClick={() => handleToggleUserStatus(userData.google_id || userData.user_id, userData.is_active)}
-                            className={`text-indigo-600 hover:text-indigo-900 transition-colors ${
-                              userData.is_active ? 'text-red-600 hover:text-red-900' : 'text-green-600 hover:text-green-900'
-                            }`}
-                          >
-                            {userData.is_active ? 'Suspend' : 'Activate'}
-                          </button>
+                          <div className="flex space-x-3">
+                            <button
+                              onClick={() => handleToggleUserStatus(userData.google_id || userData.user_id, userData.is_active)}
+                              className={`text-indigo-600 hover:text-indigo-900 transition-colors ${
+                                userData.is_active ? 'text-red-600 hover:text-red-900' : 'text-green-600 hover:text-green-900'
+                              }`}
+                            >
+                              {userData.is_active ? 'Suspend' : 'Activate'}
+                            </button>
+                            
+                            <button
+                              onClick={() => handleDeleteUser(userData.google_id || userData.user_id, userData.name)}
+                              className="text-red-800 hover:text-red-900 transition-colors font-bold"
+                              title="⚠️ Permanently delete user and all their items"
+                            >
+                              Delete
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -1707,22 +1995,93 @@ const AdminDashboard = () => {
                 <p className="text-gray-400 text-sm mt-1">Add campus locations for item pickup/dropoff</p>
               </div>
             ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {locations.map(location => (
-                  <div key={location.location_id || location.name} className="bg-white p-4 rounded-lg shadow">
-                    <h3 className="font-semibold text-gray-800">{location.name}</h3>
-                    {location.description && (
-                      <p className="text-gray-600 mt-2 text-sm">{location.description}</p>
-                    )}
-                    <div className="mt-3 text-xs text-gray-400">
-                      ID: {location.location_id || 'N/A'}
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {locations.map(location => (
+                    <div key={location.location_id || location.name} className="bg-white p-4 rounded-lg shadow">
+                      <div className="flex justify-between items-start mb-2">
+                        <h3 className="font-semibold text-gray-800">{location.name}</h3>
+                        <button
+                          onClick={() => handleDeleteLocation(location.location_id, location.name)}
+                          className="text-red-500 hover:text-red-700 p-1 rounded hover:bg-red-50 transition-colors"
+                          title="Delete location"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                      {location.description && (
+                        <p className="text-gray-600 text-sm">{location.description}</p>
+                      )}
                     </div>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
             )}
           </div>
         )}
+
+
+        {activeTab === 'terms' && (
+          <div className="space-y-4">
+            <h2 className="text-xl font-semibold text-gray-800">Terms & Conditions Management</h2>
+            <p className="text-gray-600">Customize the terms and conditions that new users must accept.</p>
+            
+            <div className="bg-white rounded-lg shadow p-6">
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Terms & Conditions Content
+                </label>
+                <textarea
+                  value={editingTerms}
+                  onChange={(e) => setEditingTerms(e.target.value)}
+                  className="w-full h-64 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-green-500 font-mono text-sm"
+                  placeholder="Enter your terms and conditions..."
+                />
+              </div>
+              
+              <div className="flex justify-between items-center">
+                <button
+                  onClick={async () => {
+                    try {
+                      const result = await apiService.getTermsContent();
+                      setCurrentTerms(result.content);
+                      setEditingTerms(result.content);
+                    } catch (error) {
+                      alert('Failed to load current terms');
+                    }
+                  }}
+                  className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors"
+                >
+                  Load Current Terms
+                </button>
+                
+                <button
+                  onClick={async () => {
+                    if (!editingTerms.trim()) {
+                      alert('Please enter terms content');
+                      return;
+                    }
+                    
+                    setSavingTerms(true);
+                    try {
+                      await apiService.updateTermsContent(editingTerms, token);
+                      setCurrentTerms(editingTerms);
+                      alert('Terms updated successfully! New users will see the updated terms.');
+                    } catch (error) {
+                      alert('Failed to update terms: ' + error.message);
+                    } finally {
+                      setSavingTerms(false);
+                    }
+                  }}
+                  disabled={savingTerms}
+                  className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors disabled:opacity-50"
+                >
+                  {savingTerms ? 'Saving...' : 'Update Terms'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+
       </div>
 
       {/* Add Location Modal */}
