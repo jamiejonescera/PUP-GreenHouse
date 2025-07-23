@@ -390,6 +390,34 @@ const apiService = {
     }
   },
   
+  // ✅ ADD THESE NEW API FUNCTIONS:
+  getApprovedItems: async (token) => {
+    try {
+      const response = await fetch(`${API_BASE}/admin/items/approved`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const result = await response.json();
+      return result;
+    } catch (error) {
+      console.error('Get approved items error:', error);
+      throw error;
+    }
+  },
+
+  getRejectedItems: async (token) => {
+    try {
+      const response = await fetch(`${API_BASE}/admin/items/rejected`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const result = await response.json();
+      return result;
+    } catch (error) {
+      console.error('Get rejected items error:', error);
+      throw error;
+    }
+  },
+
+
   getCategories: async () => {
     const response = await fetch(`${API_BASE}/categories`);
     return response.json();
@@ -1165,6 +1193,14 @@ const UserDashboard = () => {
         console.log('My claim check:', { item: item.name, claimant_email: item.claimant_email, user_email: user?.email, isMyClaim });
         return isMyClaim;
       });
+    } else if (activeTab === 'all') {
+      // ✅ NEW: Hide my own items from "All Items" tab
+      filtered = filtered.filter(item => {
+        const isMyItem = item.owner_email === user?.email || 
+                        item.owner_id === user?.user_id ||
+                        item.owner_id === user?.google_id;
+        return !isMyItem; // Show everything EXCEPT my items
+      });
     }
     
     // Filter by search term
@@ -1528,6 +1564,8 @@ const AdminDashboard = () => {
   const [currentTerms, setCurrentTerms] = useState('');
   const [editingTerms, setEditingTerms] = useState('');
   const [savingTerms, setSavingTerms] = useState(false);
+  const [approvedItems, setApprovedItems] = useState([]);
+  const [rejectedItems, setRejectedItems] = useState([]);
 
   // FIXED: Enhanced loadData with better error handling
   const loadData = React.useCallback(async () => {
@@ -1535,36 +1573,73 @@ const AdminDashboard = () => {
     setLoading(true);
     
     try {
-      // ✅ NEW: Always load users data for tab count display
-      const usersDataPromise = apiService.getUsers(token);
+      // ✅ ALWAYS load counts for ALL tabs
+      const [usersDataPromise, approvedDataPromise, rejectedDataPromise] = [
+        apiService.getUsers(token),
+        apiService.getApprovedItems(token),
+        apiService.getRejectedItems(token)
+      ];
       
       if (activeTab === 'pending') {
         console.log('📋 Loading pending items...');
-        const [items, usersData, locationsData] = await Promise.all([
+        const [items, usersData, locationsData, approvedData, rejectedData] = await Promise.all([
           apiService.getPendingItems(token),
           usersDataPromise,
-          apiService.getLocations()
+          apiService.getLocations(),
+          approvedDataPromise,
+          rejectedDataPromise
         ]);
-        console.log('📊 Pending items loaded:', items?.length || 0);
         setPendingItems(Array.isArray(items) ? items : []);
-        setUsers(Array.isArray(usersData) ? usersData : []); 
+        setUsers(Array.isArray(usersData) ? usersData : []);
         setLocations(Array.isArray(locationsData) ? locationsData : []);
+        setApprovedItems(Array.isArray(approvedData) ? approvedData : []);
+        setRejectedItems(Array.isArray(rejectedData) ? rejectedData : []);
         
       } else if (activeTab === 'users') {
         console.log('👥 Loading users...');
-        const usersData = await usersDataPromise;
-        console.log('📊 Users loaded:', usersData?.length || 0);
+        const [usersData, approvedData, rejectedData] = await Promise.all([
+          usersDataPromise,
+          approvedDataPromise,
+          rejectedDataPromise
+        ]);
         setUsers(Array.isArray(usersData) ? usersData : []);
+        setApprovedItems(Array.isArray(approvedData) ? approvedData : []);
+        setRejectedItems(Array.isArray(rejectedData) ? rejectedData : []);
         
       } else if (activeTab === 'locations') {
         console.log('📍 Loading locations...');
-        const [locationsData, usersData] = await Promise.all([
+        const [locationsData, usersData, approvedData, rejectedData] = await Promise.all([
           apiService.getLocations(),
-          usersDataPromise
+          usersDataPromise,
+          approvedDataPromise,
+          rejectedDataPromise
         ]);
-        console.log('📊 Locations loaded:', locationsData?.length || 0);
         setLocations(Array.isArray(locationsData) ? locationsData : []);
-        setUsers(Array.isArray(usersData) ? usersData : []); // ✅ Set users for count
+        setUsers(Array.isArray(usersData) ? usersData : []);
+        setApprovedItems(Array.isArray(approvedData) ? approvedData : []);
+        setRejectedItems(Array.isArray(rejectedData) ? rejectedData : []);
+        
+      } else if (activeTab === 'approved') {
+        console.log('✅ Loading approved items...');
+        const [approvedData, usersData, rejectedData] = await Promise.all([
+          approvedDataPromise,
+          usersDataPromise,
+          rejectedDataPromise
+        ]);
+        setApprovedItems(Array.isArray(approvedData) ? approvedData : []);
+        setUsers(Array.isArray(usersData) ? usersData : []);
+        setRejectedItems(Array.isArray(rejectedData) ? rejectedData : []);
+        
+      } else if (activeTab === 'rejected') {
+        console.log('❌ Loading rejected items...');
+        const [rejectedData, usersData, approvedData] = await Promise.all([
+          rejectedDataPromise,
+          usersDataPromise,
+          approvedDataPromise
+        ]);
+        setRejectedItems(Array.isArray(rejectedData) ? rejectedData : []);
+        setUsers(Array.isArray(usersData) ? usersData : []);
+        setApprovedItems(Array.isArray(approvedData) ? approvedData : []);
       }
       
       console.log('✅ Admin data loaded successfully');
@@ -1575,12 +1650,15 @@ const AdminDashboard = () => {
       if (activeTab === 'pending') setPendingItems([]);
       if (activeTab === 'users') setUsers([]);
       if (activeTab === 'locations') setLocations([]);
+      if (activeTab === 'approved') setApprovedItems([]);
+      if (activeTab === 'rejected') setRejectedItems([]);
       
       alert('Failed to load data: ' + error.message);
     } finally {
       setLoading(false);
     }
   }, [activeTab, token]);
+
 
   useEffect(() => {
     if (token && user) {
@@ -1613,14 +1691,24 @@ const AdminDashboard = () => {
       console.log('⚠️ No rejection reason provided');
       return;
     }
-
+  
     try {
       console.log('❌ Rejecting item:', itemId, 'Reason:', reason);
       await apiService.rejectItem(itemId, reason.trim(), token);
       console.log('✅ Item rejected successfully');
       
-      // Remove from pending list immediately for better UX
-      setPendingItems(prev => prev.filter(item => item.item_id !== itemId));
+      // ✅ BETTER REMOVAL: Filter by exact match
+      setPendingItems(prev => {
+        const filtered = prev.filter(item => {
+          const match = item.item_id === itemId;
+          if (match) {
+            console.log('🗑️ Removing rejected item from pending:', item.name);
+          }
+          return !match;
+        });
+        console.log('📊 Pending items before:', prev.length, 'after:', filtered.length);
+        return filtered;
+      });
       
       // Also reload data to be sure
       await loadData();
@@ -1809,6 +1897,23 @@ const AdminDashboard = () => {
               Pending Items ({pendingItems.length})
             </button>
             <button
+              onClick={() => setActiveTab('approved')}
+              className={`flex-1 py-2 px-4 rounded-md font-medium transition-colors ${
+                activeTab === 'approved' ? 'bg-white text-green-700 shadow-sm' : 'text-gray-600 hover:text-gray-800'
+              }`}
+            >
+              Approved ({approvedItems.length})
+            </button>
+            
+            <button
+              onClick={() => setActiveTab('rejected')}
+              className={`flex-1 py-2 px-4 rounded-md font-medium transition-colors ${
+                activeTab === 'rejected' ? 'bg-white text-green-700 shadow-sm' : 'text-gray-600 hover:text-gray-800'
+              }`}
+            >
+              Rejected ({rejectedItems.length})
+            </button>
+            <button
               onClick={() => setActiveTab('users')}
               className={`flex-1 py-2 px-4 rounded-md font-medium transition-colors ${
                 activeTab === 'users' ? 'bg-white text-green-700 shadow-sm' : 'text-gray-600 hover:text-gray-800'
@@ -1895,6 +2000,84 @@ const AdminDashboard = () => {
               ))}
             </div>
 
+            )}
+          </div>
+        )}
+
+
+{activeTab === 'approved' && (
+          <div className="space-y-4">
+            <h2 className="text-xl font-semibold text-gray-800">Approved Items</h2>
+            {approvedItems.length === 0 ? (
+              <div className="text-center py-8">
+                <p className="text-gray-500">No approved items</p>
+                <p className="text-gray-400 text-sm mt-1">Approved items will appear here</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {approvedItems.map(item => (
+                  <div key={item.item_id || item.name} className="bg-white rounded-lg shadow-md overflow-hidden">
+                    {(item.images || item.image_urls) && (item.images || item.image_urls).length > 0 && (
+                      <img 
+                        src={(item.images || item.image_urls)[0]} 
+                        alt={item.name} 
+                        className="w-full h-48 object-cover"
+                        onError={(e) => e.target.style.display = 'none'}
+                      />
+                    )}
+                    <div className="p-4">
+                      <h3 className="text-lg font-semibold mb-2">{item.name}</h3>
+                      <p className="text-gray-600 mb-2">Quantity: {item.quantity}</p>
+                      <p className="text-gray-600 mb-2">Category: {item.category}</p>
+                      <p className="text-gray-600 mb-2">Location: {item.location}</p>
+                      <p className="text-gray-600 mb-2">Owner: {item.owner_email || item.owner_name || 'Unknown'}</p>
+                      <span className="inline-flex px-2 py-1 text-xs font-semibold rounded-full bg-green-100 text-green-800">
+                        ✅ Approved
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {activeTab === 'rejected' && (
+          <div className="space-y-4">
+            <h2 className="text-xl font-semibold text-gray-800">Rejected Items</h2>
+            {rejectedItems.length === 0 ? (
+              <div className="text-center py-8">
+                <p className="text-gray-500">No rejected items</p>
+                <p className="text-gray-400 text-sm mt-1">Rejected items will appear here</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {rejectedItems.map(item => (
+                  <div key={item.item_id || item.name} className="bg-white rounded-lg shadow-md overflow-hidden">
+                    {(item.images || item.image_urls) && (item.images || item.image_urls).length > 0 && (
+                      <img 
+                        src={(item.images || item.image_urls)[0]} 
+                        alt={item.name} 
+                        className="w-full h-48 object-cover"
+                        onError={(e) => e.target.style.display = 'none'}
+                      />
+                    )}
+                    <div className="p-4">
+                      <h3 className="text-lg font-semibold mb-2">{item.name}</h3>
+                      <p className="text-gray-600 mb-2">Quantity: {item.quantity}</p>
+                      <p className="text-gray-600 mb-2">Category: {item.category}</p>
+                      <p className="text-gray-600 mb-2">Location: {item.location}</p>
+                      <p className="text-gray-600 mb-2">Owner: {item.owner_email || item.owner_name || 'Unknown'}</p>
+                      {item.rejection_reason && (
+                        <p className="text-red-600 mb-2 text-sm">Reason: {item.rejection_reason}</p>
+                      )}
+                      <span className="inline-flex px-2 py-1 text-xs font-semibold rounded-full bg-red-100 text-red-800">
+                        ❌ Rejected
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
             )}
           </div>
         )}
@@ -2017,6 +2200,8 @@ const AdminDashboard = () => {
             )}
           </div>
         )}
+
+
 
 
         {activeTab === 'terms' && (
