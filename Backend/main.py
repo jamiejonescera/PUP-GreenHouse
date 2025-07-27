@@ -188,6 +188,10 @@ async def upload_to_s3(file: UploadFile, folder: str) -> str:
         # Return empty string instead of failing - item can still be created without image
         return ""
 
+
+
+
+
 # Authentication Endpoints
 @app.post("/auth/login")
 async def login(user_data: UserCreate):
@@ -286,49 +290,98 @@ async def admin_login(username: str = Form(), password: str = Form()):
 # User Management Endpoints
 @app.get("/users")
 async def get_users(token_data: dict = Depends(admin_required)):
-    """Get all users (Admin only)"""
+    """Get all users (Admin only) - FIXED VERSION"""
     try:
         print("🔍 Admin getting users...")
         
-        # Look for users with item_id = "PROFILE" (no USER# prefix)
+        # Scan for user profiles with correct structure
         response = table.scan(
-            FilterExpression="item_id = :profile",
-            ExpressionAttributeValues={":profile": "PROFILE"}
+            FilterExpression="item_id = :profile AND attribute_exists(email)",
+            ExpressionAttributeValues={
+                ":profile": "PROFILE"
+            }
         )
-        
-        print(f"📊 Found {len(response.get('Items', []))} user records")
         
         users = []
         for item in response.get("Items", []):
-            print(f"👤 Processing user: {item.get('name', 'Unknown')}")
-            try:
-                user_data = {
-                    "google_id": item.get("google_id", item.get("user_id")),
-                    "user_id": item.get("user_id", item.get("google_id")),
-                    "email": item.get("email", ""),
-                    "name": item.get("name", ""),
-                    "profile_picture": item.get("profile_picture"),
-                    "is_admin": item.get("is_admin", False),
-                    "is_active": item.get("is_active", True),
-                    "created_at": item.get("created_at", ""),
-                    "last_login": item.get("last_login", "")
-                }
-                users.append(user_data)
-                print(f"✅ Added user: {user_data['name']}")
-                
-            except Exception as e:
-                print(f"❌ Error processing user: {e}")
-                continue
+            user_data = {
+                "user_id": item.get("user_id"),
+                "google_id": item.get("user_id"),  # Same as user_id in your structure
+                "name": item.get("name"),
+                "email": item.get("email"),
+                "profile_picture": item.get("profile_picture"),
+                "is_active": item.get("is_active", True),
+                "created_at": item.get("created_at"),
+                "last_login": item.get("last_login")
+            }
+            users.append(user_data)
+            print(f"✅ Added user: {item.get('name')}")
         
         print(f"🎯 Returning {len(users)} users to admin")
         return users
         
     except Exception as e:
         print(f"❌ Error getting users: {e}")
-        import traceback
-        traceback.print_exc()
-        return []
+        raise HTTPException(status_code=500, detail=str(e))
 
+
+    """Get all users (Admin only) - DEBUG VERSION"""
+    try:
+        print("🔍 Admin getting users...")
+        
+        # First, let's see ALL items that might be users
+        response = table.scan()
+        
+        print(f"📊 Total items in database: {len(response.get('Items', []))}")
+        
+        all_users = []
+        user_like_items = []
+        
+        for item in response.get("Items", []):
+            user_id = item.get("user_id", "")
+            item_id = item.get("item_id", "")
+            
+            # Look for anything that might be a user
+            if "USER#" in user_id or "email" in item or "google_id" in item:
+                user_like_items.append({
+                    "user_id": user_id,
+                    "item_id": item_id,
+                    "name": item.get("name"),
+                    "email": item.get("email"),
+                    "google_id": item.get("google_id")
+                })
+                print(f"🔍 Found user-like item: user_id={user_id}, item_id={item_id}, name={item.get('name')}, email={item.get('email')}")
+        
+        print(f"📋 Found {len(user_like_items)} user-like items")
+        
+        # Now try to build proper user list
+        seen_emails = set()
+        
+        for item in user_like_items:
+            email = item.get("email")
+            if email and email not in seen_emails:
+                seen_emails.add(email)
+                
+                user_data = {
+                    "user_id": item.get("user_id"),
+                    "google_id": item.get("google_id"),
+                    "name": item.get("name"),
+                    "email": email,
+                    "profile_picture": item.get("profile_picture"),
+                    "is_active": item.get("is_active", True),
+                    "created_at": item.get("created_at"),
+                    "last_login": item.get("last_login")
+                }
+                
+                all_users.append(user_data)
+                print(f"✅ Added user: {item.get('name')} ({email})")
+        
+        print(f"🎯 Returning {len(all_users)} users to admin")
+        return all_users
+        
+    except Exception as e:
+        print(f"❌ Error getting users: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 @app.put("/users/{google_id}/status")
 async def update_user_status(
     google_id: str, 
@@ -676,48 +729,260 @@ async def delete_item(item_id: str, token_data: dict = Depends(verify_token)):
 # Admin Item Management
 @app.get("/admin/items/pending")
 async def get_pending_items(token_data: dict = Depends(admin_required)):
-    """Get items pending approval (Admin only)"""
+    """Get pending items awaiting approval (Admin only)"""
     try:
         print("🔍 Getting pending items...")
         
         response = table.scan(
-            FilterExpression="begins_with(user_id, :user_id) AND item_id = :details AND approved = :approved",
+            FilterExpression="begins_with(user_id, :item_prefix) AND item_id = :details",
             ExpressionAttributeValues={
-                ":user_id": "ITEM#", 
-                ":details": "DETAILS",
-                ":approved": False
+                ":item_prefix": "ITEM#",
+                ":details": "DETAILS"
+<<<<<<< Updated upstream
             }
         )
         
         items = []
         for item in response.get("Items", []):
-            try:
+            # ✅ BETTER LOGIC: Check for truly pending items
+            approved = item.get("approved")
+            has_rejection = item.get("rejection_reason")
+            
+            # Include if: NOT approved AND NO rejection reason
+            if not approved and not has_rejection:
                 formatted_item = {
                     "item_id": item.get("item_id_unique", item.get("user_id", "").replace("ITEM#", "")),
-                    "name": item.get("name", ""),
-                    "quantity": item.get("quantity", 0),
-                    "category": item.get("category", ""),
-                    "location": item.get("location", ""),
-                    "owner_email": item.get("owner_email", ""),
-                    "owner_name": item.get("owner_name", ""),
+                    "name": item.get("name"),
+                    "quantity": item.get("quantity"),
+                    "category": item.get("category"),
+                    "location": item.get("location"),
+                    "owner_email": item.get("owner_email"),
+                    "owner_name": item.get("owner_name"),
+                    "status": item.get("status"),
+                    "created_at": item.get("created_at"),
                     "comments": item.get("comments"),
-                    "image_urls": item.get("image_urls", []),
                     "images": item.get("image_urls", []),
-                    "created_at": item.get("created_at", ""),
-                    "status": item.get("status", "available")
+                    "image_urls": item.get("image_urls", [])
                 }
                 items.append(formatted_item)
-                
-            except Exception as e:
-                print(f"❌ Error processing item: {e}")
-                continue
+                print(f"📝 Including pending item: {item.get('name')} (approved: {approved}, rejected: {bool(has_rejection)})")
+            else:
+                print(f"⏭️ Skipping processed item: {item.get('name')} (approved: {approved}, rejected: {bool(has_rejection)})")
         
         print(f"📊 Returning {len(items)} pending items")
         return items
         
     except Exception as e:
         print(f"❌ Error getting pending items: {e}")
-        return []
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/admin/items/approved")
+async def get_approved_items(token_data: dict = Depends(admin_required)):
+    """Get all approved items (Admin only)"""
+    try:
+        print("✅ Getting approved items...")
+        
+        response = table.scan(
+            FilterExpression="begins_with(user_id, :item_prefix) AND item_id = :details AND approved = :approved",
+            ExpressionAttributeValues={
+                ":item_prefix": "ITEM#",
+                ":details": "DETAILS",
+                ":approved": True
+            }
+        )
+        
+        items = []
+        for item in response.get("Items", []):
+            formatted_item = {
+                "item_id": item.get("item_id_unique", item.get("user_id", "").replace("ITEM#", "")),
+                "name": item.get("name"),
+                "quantity": item.get("quantity"),
+                "category": item.get("category"),
+                "location": item.get("location"),
+                "owner_email": item.get("owner_email"),
+                "owner_name": item.get("owner_name"),
+                "status": item.get("status"),
+                "approved": item.get("approved"),
+                "created_at": item.get("created_at"),
+                "images": item.get("image_urls", []),
+                "image_urls": item.get("image_urls", [])
+            }
+            items.append(formatted_item)
+        
+        print(f"📊 Returning {len(items)} approved items")
+        return items
+        
+    except Exception as e:
+        print(f"❌ Error getting approved items: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/admin/items/rejected")
+async def get_rejected_items(token_data: dict = Depends(admin_required)):
+    """Get all rejected items (Admin only)"""
+    try:
+        print("❌ Getting rejected items...")
+        
+        response = table.scan(
+            FilterExpression="begins_with(user_id, :item_prefix) AND item_id = :details AND approved = :approved",
+            ExpressionAttributeValues={
+                ":item_prefix": "ITEM#",
+                ":details": "DETAILS",
+                ":approved": False
+=======
+>>>>>>> Stashed changes
+            }
+        )
+        
+        items = []
+        for item in response.get("Items", []):
+<<<<<<< Updated upstream
+            formatted_item = {
+                "item_id": item.get("item_id_unique", item.get("user_id", "").replace("ITEM#", "")),
+                "name": item.get("name"),
+                "quantity": item.get("quantity"),
+                "category": item.get("category"),
+                "location": item.get("location"),
+                "owner_email": item.get("owner_email"),
+                "owner_name": item.get("owner_name"),
+                "status": item.get("status"),
+                "approved": item.get("approved"),
+                "rejection_reason": item.get("rejection_reason"),
+                "created_at": item.get("created_at"),
+                "images": item.get("image_urls", []),
+                "image_urls": item.get("image_urls", [])
+            }
+            items.append(formatted_item)
+=======
+            # ✅ BETTER LOGIC: Check for truly pending items
+            approved = item.get("approved")
+            has_rejection = item.get("rejection_reason")
+            
+            # Include if: NOT approved AND NO rejection reason
+            if not approved and not has_rejection:
+                formatted_item = {
+                    "item_id": item.get("item_id_unique", item.get("user_id", "").replace("ITEM#", "")),
+                    "name": item.get("name"),
+                    "quantity": item.get("quantity"),
+                    "category": item.get("category"),
+                    "location": item.get("location"),
+                    "owner_email": item.get("owner_email"),
+                    "owner_name": item.get("owner_name"),
+                    "status": item.get("status"),
+                    "created_at": item.get("created_at"),
+                    "comments": item.get("comments"),
+                    "images": item.get("image_urls", []),
+                    "image_urls": item.get("image_urls", [])
+                }
+                items.append(formatted_item)
+                print(f"📝 Including pending item: {item.get('name')} (approved: {approved}, rejected: {bool(has_rejection)})")
+            else:
+                print(f"⏭️ Skipping processed item: {item.get('name')} (approved: {approved}, rejected: {bool(has_rejection)})")
+>>>>>>> Stashed changes
+        
+        print(f"📊 Returning {len(items)} rejected items")
+        return items
+        
+    except Exception as e:
+<<<<<<< Updated upstream
+        print(f"❌ Error getting rejected items: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+=======
+        print(f"❌ Error getting pending items: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/admin/items/approved")
+async def get_approved_items(token_data: dict = Depends(admin_required)):
+    """Get all approved items (Admin only)"""
+    try:
+        print("✅ Getting approved items...")
+        
+        response = table.scan(
+            FilterExpression="begins_with(user_id, :item_prefix) AND item_id = :details AND approved = :approved",
+            ExpressionAttributeValues={
+                ":item_prefix": "ITEM#",
+                ":details": "DETAILS",
+                ":approved": True
+            }
+        )
+        
+        items = []
+        for item in response.get("Items", []):
+            formatted_item = {
+                "item_id": item.get("item_id_unique", item.get("user_id", "").replace("ITEM#", "")),
+                "name": item.get("name"),
+                "quantity": item.get("quantity"),
+                "category": item.get("category"),
+                "location": item.get("location"),
+                "owner_email": item.get("owner_email"),
+                "owner_name": item.get("owner_name"),
+                "status": item.get("status"),
+                "approved": item.get("approved"),
+                "created_at": item.get("created_at"),
+                "images": item.get("image_urls", []),
+                "image_urls": item.get("image_urls", [])
+            }
+            items.append(formatted_item)
+        
+        print(f"📊 Returning {len(items)} approved items")
+        return items
+        
+    except Exception as e:
+        print(f"❌ Error getting approved items: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/admin/items/rejected")
+async def get_rejected_items(token_data: dict = Depends(admin_required)):
+    """Get all rejected items (Admin only)"""
+    try:
+        print("❌ Getting rejected items...")
+        
+        # ✅ FIXED: Get all items first, then filter properly
+        response = table.scan(
+            FilterExpression="begins_with(user_id, :item_prefix) AND item_id = :details",
+            ExpressionAttributeValues={
+                ":item_prefix": "ITEM#",
+                ":details": "DETAILS"
+            }
+        )
+        
+        items = []
+        for item in response.get("Items", []):
+            # ✅ KEY FIX: Only include items that have a rejection_reason
+            rejection_reason = item.get("rejection_reason")
+            if rejection_reason:  # This means it was explicitly rejected
+                formatted_item = {
+                    "item_id": item.get("item_id_unique", item.get("user_id", "").replace("ITEM#", "")),
+                    "name": item.get("name"),
+                    "quantity": item.get("quantity"),
+                    "category": item.get("category"),
+                    "location": item.get("location"),
+                    "owner_email": item.get("owner_email"),
+                    "owner_name": item.get("owner_name"),
+                    "status": item.get("status"),
+                    "approved": item.get("approved"),
+                    "rejection_reason": rejection_reason,
+                    "rejected_at": item.get("rejected_at"),
+                    "created_at": item.get("created_at"),
+                    "images": item.get("image_urls", []),
+                    "image_urls": item.get("image_urls", [])
+                }
+                items.append(formatted_item)
+                print(f"📝 Including rejected item: {item.get('name')} (reason: {rejection_reason})")
+            else:
+                print(f"⏭️ Skipping non-rejected item: {item.get('name')} (no rejection reason)")
+        
+        print(f"📊 Returning {len(items)} rejected items")
+        return items
+        
+    except Exception as e:
+        print(f"❌ Error getting rejected items: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+>>>>>>> Stashed changes
 
 @app.put("/admin/items/{item_id}/approve")
 async def approve_item(item_id: str, token_data: dict = Depends(admin_required)):
@@ -776,12 +1041,17 @@ async def approve_item(item_id: str, token_data: dict = Depends(admin_required))
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.put("/admin/items/{item_id}/reject")
-async def reject_item(item_id: str, reason: str, token_data: dict = Depends(admin_required)):
-    """Reject item (Admin only)"""
+async def reject_item(
+    item_id: str,
+    request: dict,
+    token_data: dict = Depends(admin_required)
+):
+    """Reject an item (Admin only)"""
     try:
+        reason = request.get("reason", "")
         print(f"❌ Admin rejecting item: {item_id}, reason: {reason}")
         
-        # Find the item using item_id_unique
+        # Find the item
         response = table.scan(
             FilterExpression="begins_with(user_id, :item_prefix) AND item_id = :details",
             ExpressionAttributeValues={
@@ -792,28 +1062,32 @@ async def reject_item(item_id: str, reason: str, token_data: dict = Depends(admi
         
         item_found = None
         for item in response.get("Items", []):
-            if item.get("item_id_unique") == item_id:
+            item_uuid = item.get("item_id_unique", item.get("user_id", "").replace("ITEM#", ""))
+            if item_uuid == item_id:
                 item_found = item
                 break
         
         if not item_found:
-            print(f"❌ Item not found: {item_id}")
             raise HTTPException(status_code=404, detail="Item not found")
         
-        print(f"📝 Found item: {item_found.get('name')} by {item_found.get('owner_name')}")
-        
-        # Delete the rejected item
-        table.delete_item(
-            Key={"user_id": item_found["user_id"], "item_id": "DETAILS"}
+        # ✅ UPDATE WITH BOTH approved=False AND rejection_reason
+        table.update_item(
+            Key={"user_id": item_found["user_id"], "item_id": "DETAILS"},
+            UpdateExpression="SET approved = :approved, rejection_reason = :reason, rejected_at = :timestamp",
+            ExpressionAttributeValues={
+                ":approved": False,
+                ":reason": reason,
+                ":timestamp": datetime.utcnow().isoformat()
+            }
         )
         
-        print(f"✅ Item rejected and deleted: {item_found.get('name')}")
+        print(f"✅ Item rejected: {item_found.get('name')}")
         return {"message": "Item rejected successfully"}
         
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"❌ Error rejecting item: {e}")
-        import traceback
-        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 # Claims System
@@ -1157,6 +1431,121 @@ async def create_location(location: LocationCreate, token_data: dict = Depends(a
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Failed to create location: {str(e)}")
 
+@app.delete("/admin/locations/{location_id}")
+async def delete_location(
+    location_id: str,
+    token_data: dict = Depends(admin_required)
+):
+    """Delete a location (Admin only)"""
+    try:
+        print(f"🗑️ Admin deleting location: {location_id}")
+        
+        # Delete from DynamoDB
+        response = table.delete_item(
+            Key={
+                "user_id": f"LOCATION#{location_id}",
+                "item_id": "DETAILS"
+            },
+            ReturnValues="ALL_OLD"
+        )
+        
+        if "Attributes" not in response:
+            raise HTTPException(status_code=404, detail="Location not found")
+        
+        print(f"✅ Location deleted: {response['Attributes'].get('name')}")
+        return {"message": "Location deleted successfully"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ Error deleting location: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/terms-content")
+async def get_terms_content():
+    """Get current terms and conditions content"""
+    try:
+        print("📋 Getting terms content...")
+        
+        # Try to get from database first
+        response = table.get_item(
+            Key={"user_id": "SETTINGS", "item_id": "TERMS_CONTENT"}
+        )
+        
+        if "Item" in response:
+            content = response["Item"].get("content", "")
+            print(f"✅ Found custom terms content ({len(content)} chars)")
+            return {"content": content}
+        else:
+            # Return default terms if none set
+            print("📝 Using default terms content")
+            default_terms = """Welcome to Eco Pantry - PUP Community Exchange!
+
+By using this application, you agree to the following terms:
+
+1. Community Guidelines
+   • Respect all community members
+   • Only post items you genuinely want to share
+   • Be honest about item conditions
+
+2. Item Sharing Rules
+   • Items must be in good, usable condition
+   • No illegal, dangerous, or inappropriate items
+   • You are responsible for arranging pickup/delivery
+
+3. Account Responsibility
+   • Keep your account information accurate
+   • Do not share your login credentials
+   • Report any suspicious activity
+
+4. Privacy & Safety
+   • We protect your personal information
+   • Contact details are only shared between exchange participants
+   • Admin may moderate content for community safety
+
+5. Liability
+   • Use the app at your own risk
+   • PUP and Eco Pantry are not responsible for disputes
+   • Users are responsible for their own safety during exchanges
+
+By clicking "I Accept", you agree to these terms and conditions.
+
+Last updated: July 2025"""
+            
+            return {"content": default_terms}
+            
+    except Exception as e:
+        print(f"❌ Error getting terms content: {e}")
+        return {"content": "By using this app, you agree to our terms and conditions."}
+
+
+@app.put("/admin/terms-content")
+async def update_terms_content(
+    request: dict,
+    token_data: dict = Depends(admin_required)
+):
+    """Update terms and conditions content (Admin only)"""
+    try:
+        content = request.get("content", "")
+        print(f"📝 Admin updating terms content ({len(content)} chars)")
+        
+        terms_data = {
+            "user_id": "SETTINGS",
+            "item_id": "TERMS_CONTENT", 
+            "content": content,
+            "updated_at": datetime.utcnow().isoformat(),
+            "updated_by": token_data["user_id"]
+        }
+        
+        table.put_item(Item=terms_data)
+        
+        print("✅ Terms content updated successfully")
+        return {"message": "Terms content updated successfully"}
+        
+    except Exception as e:
+        print(f"❌ Error updating terms content: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 # Categories endpoint
 @app.get("/categories")
 async def get_categories():
@@ -1251,6 +1640,56 @@ async def debug_items():
     except Exception as e:
         return {"error": str(e)}
 
+@app.delete("/admin/users/{google_id}")
+async def delete_user_permanently(
+    google_id: str,
+    token_data: dict = Depends(admin_required)
+):
+    """Permanently delete a user and all their data (Admin only)"""
+    try:
+        print(f"🗑️ Admin permanently deleting user: {google_id}")
+        
+        # ✅ CORRECT KEY FORMAT based on your debug data
+        user_response = table.delete_item(
+            Key={"user_id": google_id, "item_id": "PROFILE"},
+            ReturnValues="ALL_OLD"
+        )
+        
+        if "Attributes" not in user_response:
+            raise HTTPException(status_code=404, detail=f"User {google_id} not found")
+        
+        user_name = user_response["Attributes"].get("name", "Unknown")
+        
+        # Delete user's items
+        items_response = table.scan(
+            FilterExpression="begins_with(user_id, :item_prefix) AND owner_id = :owner_id",
+            ExpressionAttributeValues={
+                ":item_prefix": "ITEM#",
+                ":owner_id": google_id
+            }
+        )
+        
+        deleted_items = 0
+        for item in items_response.get("Items", []):
+            table.delete_item(
+                Key={"user_id": item["user_id"], "item_id": item["item_id"]}
+            )
+            deleted_items += 1
+        
+        print(f"✅ User deleted: {user_name} (ID: {google_id})")
+        print(f"📊 Also deleted {deleted_items} items belonging to user")
+        
+        return {
+            "message": f"User {user_name} deleted permanently",
+            "deleted_items": deleted_items,
+            "user_name": user_name
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ Error deleting user: {e}")
+        raise HTTPException(status_code=500, detail=str(e)) 
 @app.get("/debug/users")
 async def debug_users():
     """Debug endpoint to check users in database"""
