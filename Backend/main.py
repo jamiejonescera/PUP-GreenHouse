@@ -406,6 +406,12 @@ async def update_user_status(
         print(f"❌ Error updating user status: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+def generate_signed_url(key: str, expiration: int = 3600):
+    return s3_client.generate_presigned_url(
+        'get_object',
+        Params={'Bucket': S3_BUCKET, 'Key': key},
+        ExpiresIn=expiration
+    )
 # Item Management Endpoints
 @app.post("/items")
 async def create_item(
@@ -413,17 +419,98 @@ async def create_item(
     quantity: int = Form(...),
     category: str = Form(...),
     location: str = Form(...),
-    expiry_date: Optional[str] = Form(None),
+    expiry_date: str = Form(...),  # ✅ NOW REQUIRED
     duration_days: int = Form(7),
-    comments: Optional[str] = Form(None),
-    contact_info: Optional[str] = Form(None),
-    images: List[UploadFile] = File([]),
+    comments: str = Form(...),     # ✅ NOW REQUIRED
+    contact_info: str = Form(...), # ✅ NOW REQUIRED
+    images: List[UploadFile] = File(...),  # ✅ NOW REQUIRED
     token_data: dict = Depends(verify_token)
 ):
-    """Create new item for donation"""
+    """Create new item for donation - ALL FIELDS REQUIRED"""
     try:
         print(f"🔍 Creating item for user: {token_data.get('user_id', 'Unknown')}")
         print(f"📝 Item data: name={name}, quantity={quantity}, category={category}, location={location}")
+        
+        # ✅ VALIDATE REQUIRED FIELDS
+        validation_errors = []
+        
+        # Name validation
+        if not name or not name.strip():
+            validation_errors.append("Item name is required and cannot be empty")
+        elif len(name.strip()) < 2:
+            validation_errors.append("Item name must be at least 2 characters")
+        elif len(name.strip()) > 100:
+            validation_errors.append("Item name cannot exceed 100 characters")
+            
+        # Category validation
+        if not category or not category.strip():
+            validation_errors.append("Category is required")
+            
+        # Location validation
+        if not location or not location.strip():
+            validation_errors.append("Location is required")
+            
+        # Expiry date validation
+        if not expiry_date or not expiry_date.strip():
+            validation_errors.append("Expiry date is required")
+        else:
+            try:
+                # Validate date format and ensure it's not in the past
+                expiry_datetime = datetime.fromisoformat(expiry_date.replace('Z', '+00:00'))
+                if expiry_datetime.date() < datetime.utcnow().date():
+                    validation_errors.append("Expiry date cannot be in the past")
+            except ValueError:
+                validation_errors.append("Invalid expiry date format")
+            
+        # Comments validation
+        if not comments or not comments.strip():
+            validation_errors.append("Description/comments are required")
+        elif len(comments.strip()) < 10:
+            validation_errors.append("Description must be at least 10 characters")
+        elif len(comments.strip()) > 500:
+            validation_errors.append("Description cannot exceed 500 characters")
+            
+        # Contact info validation
+        if not contact_info or not contact_info.strip():
+            validation_errors.append("Contact information is required")
+        elif len(contact_info.strip()) > 100:
+            validation_errors.append("Contact information cannot exceed 100 characters")
+            
+        # Quantity validation
+        if quantity < 1:
+            validation_errors.append("Quantity must be at least 1")
+        elif quantity > 999:
+            validation_errors.append("Quantity cannot exceed 999")
+            
+        # Images validation - MANDATORY
+        if not images or len(images) == 0:
+            validation_errors.append("At least one image is required")
+        else:
+            # Validate each image
+            for i, image in enumerate(images):
+                if not image.filename:
+                    validation_errors.append(f"Image {i+1} is invalid or empty")
+                    continue
+                    
+                # Check file size (5MB limit)
+                if hasattr(image, 'size') and image.size > 5 * 1024 * 1024:
+                    validation_errors.append(f"Image {i+1} exceeds 5MB size limit")
+                    
+                # Check file type
+                allowed_types = {'image/jpeg', 'image/jpg', 'image/png', 'image/gif'}
+                if image.content_type not in allowed_types:
+                    validation_errors.append(f"Image {i+1} must be JPEG, PNG, or GIF format")
+        
+        # If validation errors, return them
+        if validation_errors:
+            print(f"❌ Validation errors: {validation_errors}")
+            raise HTTPException(
+                status_code=400, 
+                detail={
+                    "message": "Validation failed",
+                    "errors": validation_errors
+                }
+            )
         
         # Get user info
         user_response = table.get_item(
@@ -437,46 +524,56 @@ async def create_item(
         user = user_response["Item"]
         print(f"✅ Found user: {user.get('name', 'Unknown')}")
         
-        # Upload images to S3 (if any)
+        # ✅ UPLOAD IMAGES TO S3 (MANDATORY)
         image_urls = []
-        if images:
-            for image in images:
-                if image.filename:  # Check if file was actually uploaded
-                    try:
-                        print(f"📸 Uploading image: {image.filename}")
-                        url = await upload_to_s3(image, "items")
-                        if url:  # Only add if upload was successful
-                            image_urls.append(url)
-                            print(f"✅ Image uploaded: {url}")
-                    except Exception as e:
-                        print(f"❌ Error uploading image: {e}")
+        print(f"📸 Uploading {len(images)} images...")
+        
+        for i, image in enumerate(images):
+            try:
+                print(f"📸 Uploading image {i+1}/{len(images)}: {image.filename}")
+                url = await upload_to_s3(image, "items")  # Use "items" folder
+                if url:
+                    image_urls.append(url)
+                    print(f"✅ Image {i+1} uploaded: {url}")
+                else:
+                    print(f"❌ Failed to upload image {i+1}: {image.filename}")
+                    raise HTTPException(
+                        status_code=500, 
+                        detail=f"Failed to upload image: {image.filename}"
+                    )
+            except Exception as e:
+                print(f"❌ Error uploading image {i+1}: {e}")
+                raise HTTPException(
+                    status_code=500, 
+                    detail=f"Failed to upload image {image.filename}: {str(e)}"
+                )
+        
+        # Ensure at least one image was uploaded successfully
+        if not image_urls:
+            print("❌ No images uploaded successfully")
+            raise HTTPException(status_code=500, detail="Failed to upload any images")
         
         # Create item
         item_id = str(uuid.uuid4())
         
-        # Handle expiry date
-        if expiry_date:
-            expiry_date_final = expiry_date
-        else:
-            expiry_date_final = (datetime.utcnow() + timedelta(days=duration_days)).isoformat()
-        
+        # Clean and prepare data
         item_data = {
             "user_id": f"ITEM#{item_id}",
             "item_id": "DETAILS",
-            "item_id_unique": item_id,  # For easier reference
-            "name": name,
+            "item_id_unique": item_id,
+            "name": name.strip(),
             "quantity": quantity,
-            "category": category,
-            "location": location,
+            "category": category.strip(),
+            "location": location.strip(),
             "owner_id": token_data["user_id"],
             "owner_name": user.get("name", "Unknown"),
             "owner_email": user.get("email", ""),
-            "expiry_date": expiry_date_final,
+            "expiry_date": expiry_date,  # Use provided expiry date
             "duration_days": duration_days,
-            "comments": comments or "",
-            "contact_info": contact_info or "",
+            "comments": comments.strip(),
+            "contact_info": contact_info.strip(),
             "image_urls": image_urls,
-            "images": image_urls,  # Add both field names for compatibility
+            "images": image_urls,  # Compatibility field
             "status": "available",
             "created_at": datetime.utcnow().isoformat(),
             "approved": False,  # Requires admin approval
@@ -490,9 +587,19 @@ async def create_item(
         print(f"✅ Item saved successfully: {item_id}")
         
         return {
+            "success": True,
             "message": "Item created successfully",
             "item_id": item_id,
-            "item": item_data
+            "item": {
+                "item_id": item_id,
+                "name": item_data["name"],
+                "quantity": item_data["quantity"],
+                "category": item_data["category"],
+                "location": item_data["location"],
+                "status": item_data["status"],
+                "image_count": len(image_urls),
+                "created_at": item_data["created_at"]
+            }
         }
         
     except HTTPException:
@@ -502,6 +609,56 @@ async def create_item(
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Failed to create item: {str(e)}")
+
+# ✅ ALSO UPDATE YOUR UPLOAD_TO_S3 FUNCTION FOR BETTER ERROR HANDLING
+async def upload_to_s3(file: UploadFile, folder: str) -> str:
+    """Upload file to S3 bucket with enhanced error handling"""
+    try:
+        if not file.filename:
+            raise ValueError("No filename provided")
+            
+        print(f"📸 Starting S3 upload: {file.filename}")
+        
+        # Validate file
+        if file.size and file.size > 5 * 1024 * 1024:  # 5MB limit
+            raise ValueError(f"File too large: {file.size} bytes")
+        
+        # Generate unique filename with proper extension
+        file_extension = file.filename.split('.')[-1].lower() if '.' in file.filename else 'jpg'
+        if file_extension not in ['jpg', 'jpeg', 'png', 'gif']:
+            file_extension = 'jpg'  # Default to jpg
+            
+        unique_filename = f"{folder}/{uuid.uuid4()}.{file_extension}"
+        
+        # Read file content
+        file_content = await file.read()
+        print(f"📄 File size: {len(file_content)} bytes")
+        
+        if len(file_content) == 0:
+            raise ValueError("Empty file")
+        
+        # Upload to S3
+        s3_client.put_object(
+            Bucket=S3_BUCKET,
+            Key=unique_filename,
+            Body=file_content,
+            ContentType=file.content_type or f'image/{file_extension}',
+            CacheControl='max-age=31536000',  # Cache for 1 year
+            ACL='public-read'  # Make publicly readable
+        )
+        
+        # Generate public URL
+        url = f"https://{S3_BUCKET}.s3.{AWS_REGION}.amazonaws.com/{unique_filename}"
+        print(f"✅ S3 upload successful: {url}")
+        
+        return url
+        
+    except Exception as e:
+        print(f"❌ S3 upload error: {str(e)}")
+        print(f"❌ Error type: {type(e).__name__}")
+        import traceback
+        traceback.print_exc()
+        raise  # Re-raise the error instead of returning empty string
 
 @app.get("/items")
 async def get_items(

@@ -547,7 +547,7 @@ const Login = () => {
     <div className="min-h-screen bg-gradient-to-br from-green-50 to-blue-50 flex items-center justify-center p-4">
       <div className="max-w-md w-full bg-white rounded-lg shadow-lg p-8">
         <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-green-800 mb-2">Eco Pantry</h1>
+          <h1 className="text-3xl font-bold text-green-800 mb-2">Project Green House</h1>
           <p className="text-gray-600">Sustainable Exchange Platform for PUP Community</p>
         </div>
 
@@ -627,11 +627,8 @@ const Login = () => {
 };
 
 // Item Card Component
-// Item Card Component - FIXED VERSION
 const ItemCard = ({ item, onClaim, onEdit, onDelete, currentUser, onChatToggle, showChat, chatMessages, onSendMessage, newMessage, setNewMessage }) => {
   const [showClaimModal, setShowClaimModal] = useState(false);
-  
-  console.log('ItemCard props:', { item, currentUser }); // Debug log
   
   // Fix ownership checking - handle multiple field possibilities
   const isOwner = currentUser && (
@@ -640,8 +637,6 @@ const ItemCard = ({ item, onClaim, onEdit, onDelete, currentUser, onChatToggle, 
     item.owner_id === currentUser.google_id ||
     item.owner_email === currentUser.user_id
   );
-  
-  console.log('Ownership check:', { isOwner, currentUser: currentUser?.email, owner_email: item.owner_email, owner_id: item.owner_id });
   
   const canClaim = !isOwner && item.status === 'available' && item.approved;
   
@@ -660,18 +655,40 @@ const ItemCard = ({ item, onClaim, onEdit, onDelete, currentUser, onChatToggle, 
 
   return (
     <div className="bg-white rounded-lg shadow-md overflow-hidden">
-      {/* Handle different image field names */}
-      {(item.images || item.image_urls) && (item.images || item.image_urls).length > 0 && (
-        <img 
-          src={(item.images || item.image_urls)[0]} 
-          alt={item.name} 
-          className="w-full h-48 object-cover"
-          onError={(e) => {
-            e.target.style.display = 'none';
-            console.log('Image failed to load:', e.target.src);
-          }}
-        />
-      )}
+      {/* MANDATORY IMAGE DISPLAY - Always show since images are required */}
+      <div className="relative">
+        {(item.images || item.image_urls) && (item.images || item.image_urls).length > 0 ? (
+          <>
+            <img 
+              src={(item.images || item.image_urls)[0]} 
+              alt={item.name} 
+              className="w-full h-48 object-cover"
+              onError={(e) => {
+                // Fallback to placeholder if image fails to load
+                e.target.src = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMzAwIiBoZWlnaHQ9IjIwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSIjZGRkIi8+PHRleHQgeD0iNTAlIiB5PSI1MCUiIGZvbnQtZmFtaWx5PSJBcmlhbCIgZm9udC1zaXplPSIxNCIgZmlsbD0iIzk5OSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZHk9Ii4zZW0iPkltYWdlIE5vdCBGb3VuZDwvdGV4dD48L3N2Zz4=';
+                console.log('Image failed to load, using placeholder:', e.target.src);
+              }}
+            />
+            
+            {/* Show image count if multiple images */}
+            {(item.images || item.image_urls).length > 1 && (
+              <div className="absolute top-2 right-2 bg-black bg-opacity-75 text-white text-xs px-2 py-1 rounded-full">
+                +{(item.images || item.image_urls).length - 1} more
+              </div>
+            )}
+          </>
+        ) : (
+          // Fallback placeholder (this shouldn't happen since images are mandatory)
+          <div className="w-full h-48 bg-gray-200 flex items-center justify-center">
+            <div className="text-center text-gray-500">
+              <svg className="w-12 h-12 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+              </svg>
+              <span className="text-sm">No Image Available</span>
+            </div>
+          </div>
+        )}
+      </div>
       
       <div className="p-4">
         <div className="flex justify-between items-start mb-2">
@@ -700,27 +717,29 @@ const ItemCard = ({ item, onClaim, onEdit, onDelete, currentUser, onChatToggle, 
         )}
         
         {item.comments && (
-          <p className="text-gray-600 mb-3">{item.comments}</p>
+          <p className="text-gray-600 mb-3 text-sm italic">"{item.comments}"</p>
         )}
         
-        {/* Debug info - remove after testing */}
-        <div className="text-xs text-gray-400 mb-2">
-          Owner: {item.owner_email || item.owner_id} | Current: {currentUser?.email} | Status: {item.status}
-        </div>
+        {/* Contact info for claimed items */}
+        {item.contact_info && isClaimed && (
+          <p className="text-gray-600 mb-3 text-sm">
+            <span className="font-medium">Contact:</span> {item.contact_info}
+          </p>
+        )}
         
         <div className="flex justify-between items-center">
           {isOwner ? (
             <div className="flex space-x-2">
               <button
                 onClick={() => onEdit(item)}
-                className="flex items-center px-3 py-1 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200"
+                className="flex items-center px-3 py-1 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 transition-colors"
               >
                 <Edit className="w-4 h-4 mr-1" />
                 Edit
               </button>
               <button
                 onClick={() => onDelete(item.item_id)}
-                className="flex items-center px-3 py-1 bg-red-100 text-red-700 rounded-lg hover:bg-red-200"
+                className="flex items-center px-3 py-1 bg-red-100 text-red-700 rounded-lg hover:bg-red-200 transition-colors"
               >
                 <Trash2 className="w-4 h-4 mr-1" />
                 Delete
@@ -729,7 +748,7 @@ const ItemCard = ({ item, onClaim, onEdit, onDelete, currentUser, onChatToggle, 
           ) : canClaim ? (
             <button
               onClick={() => setShowClaimModal(true)}
-              className="flex items-center px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700"
+              className="flex items-center px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
             >
               <Check className="w-4 h-4 mr-1" />
               Claim This Item
@@ -739,7 +758,7 @@ const ItemCard = ({ item, onClaim, onEdit, onDelete, currentUser, onChatToggle, 
           {isClaimed && (
             <button
               onClick={() => onChatToggle(item.item_id)}
-              className="flex items-center px-3 py-1 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200"
+              className="flex items-center px-3 py-1 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 transition-colors"
             >
               <MessageSquare className="w-4 h-4 mr-1" />
               Chat
@@ -749,7 +768,7 @@ const ItemCard = ({ item, onClaim, onEdit, onDelete, currentUser, onChatToggle, 
         
         {showChat && isClaimed && (
           <div className="mt-4 border-t pt-4">
-            <div className="h-32 overflow-y-auto mb-2 bg-gray-50 p-2 rounded">
+            <div className="h-32 overflow-y-auto mb-2 bg-gray-50 p-2 rounded border">
               {chatMessages && chatMessages.length > 0 ? (
                 chatMessages.map((msg, index) => {
                   const isMyMessage = msg.sender_email === currentUser?.email || 
@@ -759,7 +778,7 @@ const ItemCard = ({ item, onClaim, onEdit, onDelete, currentUser, onChatToggle, 
                   return (
                     <div key={index} className={`mb-2 ${isMyMessage ? 'text-right' : 'text-left'}`}>
                       <div className={`inline-block p-2 rounded-lg max-w-xs ${
-                        isMyMessage ? 'bg-green-600 text-white' : 'bg-white text-gray-800'
+                        isMyMessage ? 'bg-green-600 text-white' : 'bg-white text-gray-800 border'
                       }`}>
                         <p className="text-sm">{msg.message}</p>
                         <p className="text-xs opacity-75">
@@ -770,7 +789,7 @@ const ItemCard = ({ item, onClaim, onEdit, onDelete, currentUser, onChatToggle, 
                   );
                 })
               ) : (
-                <p className="text-gray-500 text-sm">No messages yet</p>
+                <p className="text-gray-500 text-sm text-center py-4">No messages yet</p>
               )}
             </div>
             <div className="flex">
@@ -784,7 +803,7 @@ const ItemCard = ({ item, onClaim, onEdit, onDelete, currentUser, onChatToggle, 
               />
               <button
                 onClick={onSendMessage}
-                className="px-4 py-2 bg-green-600 text-white rounded-r-lg hover:bg-green-700"
+                className="px-4 py-2 bg-green-600 text-white rounded-r-lg hover:bg-green-700 transition-colors"
               >
                 Send
               </button>
@@ -795,21 +814,21 @@ const ItemCard = ({ item, onClaim, onEdit, onDelete, currentUser, onChatToggle, 
       
       {showClaimModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white p-6 rounded-lg max-w-sm w-full mx-4">
-            <h3 className="text-lg font-bold mb-4">Claim This Item</h3>
+          <div className="bg-white p-6 rounded-lg max-w-sm w-full mx-4 shadow-xl">
+            <h3 className="text-lg font-bold mb-4 text-gray-900">Claim This Item</h3>
             <p className="text-gray-600 mb-4">
               You must claim this item - no cancellations! Are you sure you want to proceed?
             </p>
             <div className="flex space-x-3">
               <button
                 onClick={handleClaim}
-                className="flex-1 bg-green-600 text-white py-2 px-4 rounded-lg hover:bg-green-700"
+                className="flex-1 bg-green-600 text-white py-2 px-4 rounded-lg hover:bg-green-700 transition-colors"
               >
                 Yes, Claim It
               </button>
               <button
                 onClick={() => setShowClaimModal(false)}
-                className="flex-1 bg-gray-300 text-gray-700 py-2 px-4 rounded-lg hover:bg-gray-400"
+                className="flex-1 bg-gray-300 text-gray-700 py-2 px-4 rounded-lg hover:bg-gray-400 transition-colors"
               >
                 Cancel
               </button>
@@ -822,7 +841,6 @@ const ItemCard = ({ item, onClaim, onEdit, onDelete, currentUser, onChatToggle, 
 };
 
 // Add/Edit Item Modal
-// Add/Edit Item Modal - FIXED VERSION
 const ItemModal = ({ isOpen, onClose, item, onSave, locations, categories }) => {
   const [formData, setFormData] = useState({
     name: '',
@@ -836,23 +854,26 @@ const ItemModal = ({ isOpen, onClose, item, onSave, locations, categories }) => 
     images: null
   });
   const [loading, setLoading] = useState(false);
+  const [errors, setErrors] = useState({});
 
+  // ✅ FIX: Add useEffect to populate form when editing
   useEffect(() => {
-    console.log('📝 ItemModal opened:', { item, locations: locations?.length, categories: categories?.length });
-    
-    if (item) {
+    if (item && isOpen) {
+      // Populate form with existing item data
       setFormData({
         name: item.name || '',
         quantity: item.quantity || 1,
         category: item.category || '',
         location: item.location || '',
-        expiry_date: item.expiry_date || '',
+        expiry_date: item.expiry_date ? item.expiry_date.split('T')[0] : '', // Format date for input
         duration_days: item.duration_days || 7,
         comments: item.comments || '',
         contact_info: item.contact_info || '',
-        images: null // Always null for editing (can't edit images)
+        images: null // Can't pre-populate file input
       });
-    } else {
+      setErrors({}); // Clear any previous errors
+    } else if (!item && isOpen) {
+      // Reset form for new items
       setFormData({
         name: '',
         quantity: 1,
@@ -864,44 +885,101 @@ const ItemModal = ({ isOpen, onClose, item, onSave, locations, categories }) => 
         contact_info: '',
         images: null
       });
+      setErrors({});
     }
   }, [item, isOpen]);
+
+  // Validation function
+  const validateForm = () => {
+    const newErrors = {};
+
+    // Name validation
+    if (!formData.name || !formData.name.trim()) {
+      newErrors.name = 'Item name is required';
+    }
+
+    // Category validation
+    if (!formData.category) {
+      newErrors.category = 'Category is required';
+    }
+
+    // Location validation
+    if (!formData.location) {
+      newErrors.location = 'Location is required';
+    }
+
+    // Expiry date validation
+    if (!formData.expiry_date) {
+      newErrors.expiry_date = 'Expiry date is required';
+    } else {
+      // Check if date is not in the past
+      const selectedDate = new Date(formData.expiry_date);
+      const today = new Date();
+      today.setHours(0, 0, 0, 0); // Reset time for accurate comparison
+      
+      if (selectedDate < today) {
+        newErrors.expiry_date = 'Expiry date cannot be in the past';
+      }
+    }
+
+    // Comments validation
+    if (!formData.comments || !formData.comments.trim()) {
+      newErrors.comments = 'Description is required';
+    } else if (formData.comments.trim().length < 10) {
+      newErrors.comments = 'Description must be at least 10 characters';
+    }
+
+    // Contact info validation
+    if (!formData.contact_info || !formData.contact_info.trim()) {
+      newErrors.contact_info = 'Contact information is required';
+    }
+
+    // Images validation (only for new items)
+    if (!item && (!formData.images || formData.images.length === 0)) {
+      newErrors.images = 'At least one image is required';
+    }
+
+    // Quantity validation
+    if (!formData.quantity || formData.quantity < 1) {
+      newErrors.quantity = 'Quantity must be at least 1';
+    }
+
+    setErrors(newErrors);
+    return Object.keys(newErrors).length === 0;
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     
-    // Validation
-    if (!formData.name.trim()) {
-      alert('Please enter an item name');
-      return;
-    }
-    if (!formData.category) {
-      alert('Please select a category');
-      return;
-    }
-    if (!formData.location) {
-      alert('Please select a location');
-      return;
-    }
-    if (formData.quantity < 1) {
-      alert('Quantity must be at least 1');
-      return;
+    // Validate form
+    if (!validateForm()) {
+      return; // Stop if validation fails
     }
 
     setLoading(true);
     
     try {
-      console.log('💾 Saving item:', formData);
       await onSave(formData);
-      console.log('✅ Item saved successfully');
+      
+      // ✅ FIX: Success feedback (you can replace with custom modal later)
+      console.log('✅ Item saved successfully!');
+      
+      // Close modal on success
+      onClose();
+      
     } catch (error) {
       console.error('❌ Error saving item:', error);
-      alert('Failed to save item: ' + error.message);
+      
+      // ✅ FIX: Better error handling (you can replace with custom modal)
+      setErrors({ 
+        submit: 'Failed to save item: ' + (error.message || 'Unknown error') 
+      });
     } finally {
       setLoading(false);
     }
   };
 
+  // Don't render if not open
   if (!isOpen) return null;
 
   return (
@@ -919,7 +997,15 @@ const ItemModal = ({ isOpen, onClose, item, onSave, locations, categories }) => 
             </button>
           </div>
           
+          {/* ✅ FIX: Show submit errors */}
+          {errors.submit && (
+            <div className="mb-4 p-3 bg-red-100 border border-red-400 text-red-700 rounded">
+              {errors.submit}
+            </div>
+          )}
+          
           <form onSubmit={handleSubmit}>
+            {/* Item Name - REQUIRED */}
             <div className="mb-4">
               <label className="block text-sm font-medium text-gray-700 mb-2">
                 Item Name <span className="text-red-500">*</span>
@@ -928,13 +1014,18 @@ const ItemModal = ({ isOpen, onClose, item, onSave, locations, categories }) => 
                 type="text"
                 value={formData.name}
                 onChange={(e) => setFormData({...formData, name: e.target.value})}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-green-500"
+                className={`w-full px-3 py-2 border rounded-lg focus:outline-none transition-colors ${
+                  errors.name ? 'border-red-500 focus:border-red-500' : 'border-gray-300 focus:border-green-500'
+                }`}
                 required
                 disabled={loading}
                 placeholder="Enter item name"
+                maxLength={100}
               />
+              {errors.name && <p className="text-red-500 text-xs mt-1">{errors.name}</p>}
             </div>
             
+            {/* Quantity - REQUIRED */}
             <div className="mb-4">
               <label className="block text-sm font-medium text-gray-700 mb-2">
                 Quantity <span className="text-red-500">*</span>
@@ -942,14 +1033,19 @@ const ItemModal = ({ isOpen, onClose, item, onSave, locations, categories }) => 
               <input
                 type="number"
                 min="1"
+                max="999"
                 value={formData.quantity}
                 onChange={(e) => setFormData({...formData, quantity: parseInt(e.target.value) || 1})}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-green-500"
+                className={`w-full px-3 py-2 border rounded-lg focus:outline-none transition-colors ${
+                  errors.quantity ? 'border-red-500 focus:border-red-500' : 'border-gray-300 focus:border-green-500'
+                }`}
                 required
                 disabled={loading}
               />
+              {errors.quantity && <p className="text-red-500 text-xs mt-1">{errors.quantity}</p>}
             </div>
             
+            {/* Category - REQUIRED */}
             <div className="mb-4">
               <label className="block text-sm font-medium text-gray-700 mb-2">
                 Category <span className="text-red-500">*</span>
@@ -957,7 +1053,9 @@ const ItemModal = ({ isOpen, onClose, item, onSave, locations, categories }) => 
               <select
                 value={formData.category}
                 onChange={(e) => setFormData({...formData, category: e.target.value})}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-green-500"
+                className={`w-full px-3 py-2 border rounded-lg focus:outline-none transition-colors ${
+                  errors.category ? 'border-red-500 focus:border-red-500' : 'border-gray-300 focus:border-green-500'
+                }`}
                 required
                 disabled={loading}
               >
@@ -970,8 +1068,10 @@ const ItemModal = ({ isOpen, onClose, item, onSave, locations, categories }) => 
                   <option disabled>Loading categories...</option>
                 )}
               </select>
+              {errors.category && <p className="text-red-500 text-xs mt-1">{errors.category}</p>}
             </div>
             
+            {/* Location - REQUIRED */}
             <div className="mb-4">
               <label className="block text-sm font-medium text-gray-700 mb-2">
                 Location <span className="text-red-500">*</span>
@@ -979,7 +1079,9 @@ const ItemModal = ({ isOpen, onClose, item, onSave, locations, categories }) => 
               <select
                 value={formData.location}
                 onChange={(e) => setFormData({...formData, location: e.target.value})}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-green-500"
+                className={`w-full px-3 py-2 border rounded-lg focus:outline-none transition-colors ${
+                  errors.location ? 'border-red-500 focus:border-red-500' : 'border-gray-300 focus:border-green-500'
+                }`}
                 required
                 disabled={loading}
               >
@@ -994,30 +1096,37 @@ const ItemModal = ({ isOpen, onClose, item, onSave, locations, categories }) => 
                   <option disabled>Loading locations...</option>
                 )}
               </select>
+              {errors.location && <p className="text-red-500 text-xs mt-1">{errors.location}</p>}
             </div>
             
+            {/* Expiry Date - REQUIRED */}
             <div className="mb-4">
               <label className="block text-sm font-medium text-gray-700 mb-2">
-                Expiry Date (Optional)
+                Expiry Date <span className="text-red-500">*</span>
               </label>
               <input
                 type="date"
                 value={formData.expiry_date}
                 onChange={(e) => setFormData({...formData, expiry_date: e.target.value})}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-green-500"
+                className={`w-full px-3 py-2 border rounded-lg focus:outline-none transition-colors ${
+                  errors.expiry_date ? 'border-red-500 focus:border-red-500' : 'border-gray-300 focus:border-green-500'
+                }`}
+                required
                 disabled={loading}
                 min={new Date().toISOString().split('T')[0]}
               />
+              {errors.expiry_date && <p className="text-red-500 text-xs mt-1">{errors.expiry_date}</p>}
             </div>
             
+            {/* Duration Days */}
             <div className="mb-4">
               <label className="block text-sm font-medium text-gray-700 mb-2">
-                Duration (Days)
+                Duration (Days) <span className="text-red-500">*</span>
               </label>
               <select
                 value={formData.duration_days}
                 onChange={(e) => setFormData({...formData, duration_days: parseInt(e.target.value)})}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-green-500"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-green-500 transition-colors"
                 disabled={loading}
               >
                 <option value={1}>1 day</option>
@@ -1028,48 +1137,74 @@ const ItemModal = ({ isOpen, onClose, item, onSave, locations, categories }) => 
               </select>
             </div>
             
+            {/* Comments - REQUIRED */}
             <div className="mb-4">
               <label className="block text-sm font-medium text-gray-700 mb-2">
-                Comments (Optional)
+                Description/Comments <span className="text-red-500">*</span>
               </label>
               <textarea
                 rows="3"
                 value={formData.comments}
                 onChange={(e) => setFormData({...formData, comments: e.target.value})}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-green-500"
+                className={`w-full px-3 py-2 border rounded-lg focus:outline-none transition-colors ${
+                  errors.comments ? 'border-red-500 focus:border-red-500' : 'border-gray-300 focus:border-green-500'
+                }`}
+                required
                 disabled={loading}
-                placeholder="Any additional details about the item..."
+                placeholder="Describe the item condition, how to use it, etc. (minimum 10 characters)"
+                maxLength={500}
               />
+              <div className="flex justify-between items-center mt-1">
+                {errors.comments ? (
+                  <p className="text-red-500 text-xs">{errors.comments}</p>
+                ) : (
+                  <p className="text-gray-500 text-xs">Minimum 10 characters</p>
+                )}
+                <p className="text-gray-400 text-xs">{formData.comments.length}/500</p>
+              </div>
             </div>
             
+            {/* Contact Info - REQUIRED */}
             <div className="mb-4">
               <label className="block text-sm font-medium text-gray-700 mb-2">
-                Contact Info (Optional)
+                Contact Information <span className="text-red-500">*</span>
               </label>
               <input
                 type="text"
-                placeholder="Phone number or additional contact"
+                placeholder="Phone number, email, or other contact method"
                 value={formData.contact_info}
                 onChange={(e) => setFormData({...formData, contact_info: e.target.value})}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-green-500"
+                className={`w-full px-3 py-2 border rounded-lg focus:outline-none transition-colors ${
+                  errors.contact_info ? 'border-red-500 focus:border-red-500' : 'border-gray-300 focus:border-green-500'
+                }`}
+                required
                 disabled={loading}
+                maxLength={100}
               />
+              {errors.contact_info && <p className="text-red-500 text-xs mt-1">{errors.contact_info}</p>}
             </div>
             
+            {/* Images - REQUIRED for new items */}
             {!item && (
               <div className="mb-6">
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Images (Optional)
+                  Images <span className="text-red-500">*</span>
                 </label>
                 <input
                   type="file"
                   multiple
-                  accept="image/*"
+                  accept="image/jpeg,image/png,image/jpg,image/gif"
                   onChange={(e) => setFormData({...formData, images: e.target.files})}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-green-500"
+                  className={`w-full px-3 py-2 border rounded-lg focus:outline-none transition-colors ${
+                    errors.images ? 'border-red-500 focus:border-red-500' : 'border-gray-300 focus:border-green-500'
+                  }`}
+                  required
                   disabled={loading}
                 />
-                <p className="text-xs text-gray-500 mt-1">You can select multiple images</p>
+                {errors.images && <p className="text-red-500 text-xs mt-1">{errors.images}</p>}
+                <p className="text-xs text-gray-500 mt-1">
+                  Upload at least one clear photo. Accepted formats: JPG, PNG, GIF (max 5MB each)
+                </p>
               </div>
             )}
             
@@ -1372,7 +1507,7 @@ const UserDashboard = () => {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center py-4">
             <div className="flex items-center">
-              <h1 className="text-2xl font-bold text-green-800">Eco Pantry</h1>
+              <h1 className="text-2xl font-bold text-green-800">Project GreenHouse</h1>
             </div>
             <div className="flex items-center space-x-4">
               <div className="flex items-center">
@@ -1974,11 +2109,7 @@ const AdminDashboard = () => {
                       <p className="text-gray-600 mb-4 text-sm italic">"{item.comments}"</p>
                     )}
                     
-                    {/* Debug info */}
-                    <div className="text-xs text-gray-400 mb-3">
-                      Item ID: {item.item_id} | Debug: {JSON.stringify(item.item_id)}
-                    </div>
-                    
+                      
                     <div className="flex space-x-2">
                       <button
                         onClick={() => handleApproveItem(item.item_id)} // ✅ Use item.item_id (the real UUID)
