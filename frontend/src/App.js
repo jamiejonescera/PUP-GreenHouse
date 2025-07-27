@@ -547,7 +547,7 @@ const Login = () => {
     <div className="min-h-screen bg-gradient-to-br from-green-50 to-blue-50 flex items-center justify-center p-4">
       <div className="max-w-md w-full bg-white rounded-lg shadow-lg p-8">
         <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-green-800 mb-2">Project Green House</h1>
+          <h1 className="text-3xl font-bold text-green-800 mb-2">Project GreenHouse</h1>
           <p className="text-gray-600">Sustainable Exchange Platform for PUP Community</p>
         </div>
 
@@ -662,7 +662,7 @@ const ItemCard = ({ item, onClaim, onEdit, onDelete, currentUser, onChatToggle, 
             <img 
               src={(item.images || item.image_urls)[0]} 
               alt={item.name} 
-              className="w-full h-48 object-cover"
+              className="w-full h-400 object-cover"
               onError={(e) => {
                 // Fallback to placeholder if image fails to load
                 e.target.src = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMzAwIiBoZWlnaHQ9IjIwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSIjZGRkIi8+PHRleHQgeD0iNTAlIiB5PSI1MCUiIGZvbnQtZmFtaWx5PSJBcmlhbCIgZm9udC1zaXplPSIxNCIgZmlsbD0iIzk5OSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZHk9Ii4zZW0iPkltYWdlIE5vdCBGb3VuZDwvdGV4dD48L3N2Zz4=';
@@ -1259,6 +1259,7 @@ const UserDashboard = () => {
   const [chatMessages, setChatMessages] = useState({});
   const [newMessages, setNewMessages] = useState({});
   const [showSuccessModal, setShowSuccessModal] = useState(false);
+  const [showTermsModal, setShowTermsModal] = useState(false);
   // FIXED: Enhanced loadData with better error handling and logging
   const loadData = React.useCallback(async () => {
     console.log('🔄 Loading data... User:', user?.email, 'Token:', !!token);
@@ -1457,6 +1458,75 @@ const UserDashboard = () => {
     }
   };
 
+
+    // Add this component BEFORE the UserDashboard component
+  const TermsViewModal = ({ isOpen, onClose }) => {
+    const [termsContent, setTermsContent] = useState('');
+    const [loading, setLoading] = useState(true);
+
+    useEffect(() => {
+      if (isOpen) {
+        loadTermsContent();
+      }
+    }, [isOpen]);
+
+    const loadTermsContent = async () => {
+      try {
+        const response = await fetch(`${API_BASE}/terms-content`);
+        const data = await response.json();
+        setTermsContent(data.content);
+      } catch (error) {
+        console.error('Error loading terms:', error);
+        setTermsContent('Failed to load terms and conditions.');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    if (!isOpen) return null;
+
+    return (
+      <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+        <div className="bg-white rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
+          <div className="p-6">
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-2xl font-bold text-gray-900">Rules & Regulations</h2>
+              <button
+                onClick={onClose}
+                className="text-gray-400 hover:text-gray-600 transition-colors"
+              >
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+
+            <div className="border-b border-gray-200 mb-4"></div>
+
+            {loading ? (
+              <div className="flex items-center justify-center h-64">
+                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-green-600"></div>
+              </div>
+            ) : (
+              <div className="prose prose-lg max-w-none">
+                <div className="whitespace-pre-wrap text-gray-700 leading-relaxed">
+                  {termsContent}
+                </div>
+              </div>
+            )}
+
+            <div className="flex justify-end mt-6 pt-4 border-t border-gray-200">
+              <button
+                onClick={onClose}
+                className="px-6 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   const handleSendMessage = async (itemId) => {
     const message = newMessages[itemId];
     if (!message?.trim()) {
@@ -1519,6 +1589,7 @@ const UserDashboard = () => {
                 />
                 <span className="text-gray-700">{user?.name || 'User'}</span>
               </div>
+
               <button
                 onClick={logout}
                 className="flex items-center px-3 py-2 text-gray-700 hover:text-gray-900 transition-colors"
@@ -1556,6 +1627,8 @@ const UserDashboard = () => {
                 item.owner_id === user?.google_id
               ).length})
             </button>
+            
+            
             <button
               onClick={() => setActiveTab('claimed')}
               className={`flex-1 py-2 px-4 rounded-md font-medium transition-colors ${
@@ -1564,6 +1637,15 @@ const UserDashboard = () => {
             >
               My Claims ({myClaims.length})
             </button>
+            
+            <button
+              onClick={() => setShowTermsModal(true)}
+              className={`flex-1 py-2 px-4 rounded-md font-medium transition-colors ${
+                activeTab === 'claimed' ? 'bg-white text-green-700 shadow-sm' : 'text-gray-600 hover:text-gray-800'
+              }`}
+            >
+              My Claims ({myClaims.length})
+            </button>          
           </div>
 
           {/* Search and Filters */}
@@ -1590,17 +1672,14 @@ const UserDashboard = () => {
               ))}
             </select>
             
-            <select
-              value={filterLocation}
-              onChange={(e) => setFilterLocation(e.target.value)}
-              className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-green-500"
+           
+            <button
+              onClick={() => setShowTermsModal(true)}
+              className="flex items-center px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
             >
-              <option value="">All Locations</option>
-              {locations.map(loc => (
-                <option key={loc.location_id || loc.name} value={loc.name}>{loc.name}</option>
-              ))}
-            </select>
-            
+              Rules & Regulations
+            </button>
+
             <button
               onClick={() => setShowModal(true)}
               className="flex items-center px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
@@ -1646,18 +1725,18 @@ const UserDashboard = () => {
         )}
       </div>
 
-      {/* Add/Edit Modal */}
-      <ItemModal
-        isOpen={showModal || !!editingItem}
-        onClose={() => {
-          setShowModal(false);
-          setEditingItem(null);
-        }}
-        item={editingItem}
-        onSave={editingItem ? handleEditItem : handleAddItem}
-        locations={locations}
-        categories={categories}
-      />
+        {/* Add/Edit Modal */}
+        <ItemModal
+          isOpen={showModal || !!editingItem}
+          onClose={() => {
+            setShowModal(false);
+            setEditingItem(null);
+          }}
+          item={editingItem}
+          onSave={editingItem ? handleEditItem : handleAddItem}
+          locations={locations}
+          categories={categories}
+          />
         {showSuccessModal && (
             <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
               <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4 shadow-xl">
@@ -1679,6 +1758,10 @@ const UserDashboard = () => {
               </div>
             </div>
           )}
+        <TermsViewModal
+        isOpen={showTermsModal}
+        onClose={() => setShowTermsModal(false)}
+      />
     </div>
   );
 };
@@ -2095,7 +2178,7 @@ const AdminDashboard = () => {
                     <img 
                       src={(item.images || item.image_urls)[0]} 
                       alt={item.name} 
-                      className="w-full h-48 object-cover"
+                      className="w-full h-400 object-cover"
                       onError={(e) => e.target.style.display = 'none'}
                     />
                   )}
@@ -2152,7 +2235,7 @@ const AdminDashboard = () => {
                       <img 
                         src={(item.images || item.image_urls)[0]} 
                         alt={item.name} 
-                        className="w-full h-48 object-cover"
+                        className="w-full h-400 object-cover"
                         onError={(e) => e.target.style.display = 'none'}
                       />
                     )}
@@ -2189,7 +2272,7 @@ const AdminDashboard = () => {
                       <img 
                         src={(item.images || item.image_urls)[0]} 
                         alt={item.name} 
-                        className="w-full h-48 object-cover"
+                        className="w-full h-400 object-cover"
                         onError={(e) => e.target.style.display = 'none'}
                       />
                     )}
