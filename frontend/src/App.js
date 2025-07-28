@@ -1,8 +1,167 @@
 import React, { useState, useEffect, createContext, useContext } from 'react';
 import { ChevronDown, Plus, Search, User, LogOut, MapPin, Clock, MessageSquare, Check, X, Edit, Trash2, Users, Settings, Eye, Shield } from 'lucide-react';
+import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate } from 'react-router-dom';
 
 // Auth Context
 const AuthContext = createContext();
+
+// STEP 1: Add this RIGHT AFTER your AuthContext (around line 60 in App.js)
+
+// Add this AFTER the AuthProvider component:
+const NotificationContext = createContext();
+
+const NotificationProvider = ({ children }) => {
+  const [notifications, setNotifications] = useState([]);
+  const [confirmDialog, setConfirmDialog] = useState(null);
+  const [promptDialog, setPromptDialog] = useState(null);
+
+  const showSuccess = (message) => {
+    const id = Date.now();
+    setNotifications(prev => [...prev, { id, type: 'success', message }]);
+    setTimeout(() => removeNotification(id), 3000);
+  };
+
+  const showError = (message) => {
+    const id = Date.now();
+    setNotifications(prev => [...prev, { id, type: 'error', message }]);
+    setTimeout(() => removeNotification(id), 5000);
+  };
+
+  const showConfirm = (title, message) => {
+    return new Promise((resolve) => {
+      setConfirmDialog({
+        title,
+        message,
+        onConfirm: () => {
+          setConfirmDialog(null);
+          resolve(true);
+        },
+        onCancel: () => {
+          setConfirmDialog(null);
+          resolve(false);
+        }
+      });
+    });
+  };
+
+  const showPrompt = (title, message, placeholder = '') => {
+    return new Promise((resolve) => {
+      setPromptDialog({
+        title,
+        message,
+        placeholder,
+        onConfirm: (value) => {
+          setPromptDialog(null);
+          resolve(value);
+        },
+        onCancel: () => {
+          setPromptDialog(null);
+          resolve(null);
+        }
+      });
+    });
+  };
+
+  const removeNotification = (id) => {
+    setNotifications(prev => prev.filter(n => n.id !== id));
+  };
+
+  return (
+    <NotificationContext.Provider value={{ showSuccess, showError, showConfirm, showPrompt }}>
+      {children}
+      
+      {/* Toast Notifications */}
+      <div className="fixed top-4 right-4 z-50 space-y-2">
+        {notifications.map(notification => (
+          <div
+            key={notification.id}
+            className={`p-4 rounded-lg shadow-lg max-w-sm ${
+              notification.type === 'success' ? 'bg-green-500 text-white' :
+              notification.type === 'error' ? 'bg-red-500 text-white' :
+              'bg-gray-500 text-white'
+            }`}
+          >
+            <div className="flex items-start justify-between">
+              <p className="text-sm">{notification.message}</p>
+              <button
+                onClick={() => removeNotification(notification.id)}
+                className="ml-2 text-white hover:text-gray-200"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Custom Confirm Dialog */}
+      {confirmDialog && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 max-w-sm w-full mx-4 shadow-xl">
+            <h3 className="text-lg font-semibold text-gray-800 mb-2">
+              {confirmDialog.title}
+            </h3>
+            <p className="text-gray-600 mb-6">{confirmDialog.message}</p>
+            <div className="flex space-x-3">
+              <button
+                onClick={confirmDialog.onConfirm}
+                className="flex-1 bg-green-600 text-white py-2 px-4 rounded-lg hover:bg-green-700 transition-colors"
+              >
+                Yes
+              </button>
+              <button
+                onClick={confirmDialog.onCancel}
+                className="flex-1 bg-gray-300 text-gray-700 py-2 px-4 rounded-lg hover:bg-gray-400 transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Custom Prompt Dialog */}
+      {promptDialog && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 max-w-sm w-full mx-4 shadow-xl">
+            <h3 className="text-lg font-semibold text-gray-800 mb-2">
+              {promptDialog.title}
+            </h3>
+            <p className="text-gray-600 mb-4">{promptDialog.message}</p>
+            <input
+              id="prompt-input"
+              type="text"
+              placeholder={promptDialog.placeholder}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-green-500 mb-6"
+              autoFocus
+            />
+            <div className="flex space-x-3">
+              <button
+                onClick={() => {
+                  const input = document.getElementById('prompt-input');
+                  promptDialog.onConfirm(input.value);
+                }}
+                className="flex-1 bg-green-600 text-white py-2 px-4 rounded-lg hover:bg-green-700 transition-colors"
+              >
+                OK
+              </button>
+              <button
+                onClick={promptDialog.onCancel}
+                className="flex-1 bg-gray-300 text-gray-700 py-2 px-4 rounded-lg hover:bg-gray-400 transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </NotificationContext.Provider>
+  );
+};
+
+const useNotification = () => useContext(NotificationContext);
+
+// STEP 2: Find your EcoPantryApp component (at the very bottom) and change it to:
 
 
 const AuthProvider = ({ children }) => {
@@ -16,9 +175,19 @@ const AuthProvider = ({ children }) => {
   
   useEffect(() => {
     if (token) {
-      const userData = localStorage.getItem('user');
-      if (userData) {
-        setUser(JSON.parse(userData));
+      try {
+        // Decode JWT to get admin status (secure way)
+        const payload = JSON.parse(atob(token.split('.')[1]));
+        const adminStatus = payload.is_admin || false;
+        
+        const userData = localStorage.getItem('user');
+        if (userData) {
+          setUser(JSON.parse(userData));
+          setIsAdmin(adminStatus);
+        }
+      } catch (error) {
+        console.error('Invalid token:', error);
+        logout();
       }
     }
   }, [token]);
@@ -31,9 +200,9 @@ const AuthProvider = ({ children }) => {
     localStorage.setItem('user', JSON.stringify(userData));
     localStorage.setItem('isAdmin', adminStatus.toString());
     
-    // ✅ NEW: Check if user has accepted terms (only for regular users)
+    // ✅ Check if user has accepted terms (only for regular users)
     if (!adminStatus) {
-      const acceptedTerms = localStorage.getItem(`terms_accepted_${userData.user_id}`);
+      const acceptedTerms = localStorage.getItem(`terms_accepted_${userData.user_id || userData.google_id}`);
       if (!acceptedTerms) {
         // First-time user - show terms
         fetchTermsContent();
@@ -42,33 +211,40 @@ const AuthProvider = ({ children }) => {
     }
   };
 
-// Add these functions after the login function
-const fetchTermsContent = async () => {
-  try {
-    const response = await fetch(`${API_BASE}/terms-content`);
-    const result = await response.json();
-    setTermsContent(result.content || 'Default Terms and Conditions content...');
-  } catch (error) {
-    console.error('Error fetching terms:', error);
-    setTermsContent('By using this app, you agree to our terms and conditions.');
-  }
-};
+  // ✅ Fetch terms content from backend
+  const fetchTermsContent = async () => {
+    try {
+      const response = await fetch(`${API_BASE}/terms-content`);
+      const result = await response.json();
+      setTermsContent(result.content || 'Default Terms and Conditions content...');
+    } catch (error) {
+      console.error('Error fetching terms:', error);
+      setTermsContent('By using this app, you agree to our terms and conditions.');
+    }
+  };
 
-const acceptTerms = () => {
-  localStorage.setItem(`terms_accepted_${user.user_id}`, 'true');
-  setShowTermsModal(false);
-  setHasAcceptedTerms(true);
-};
+  // ✅ Accept terms function
+  const acceptTerms = () => {
+    const userId = user?.user_id || user?.google_id;
+    if (userId) {
+      localStorage.setItem(`terms_accepted_${userId}`, 'true');
+      setShowTermsModal(false);
+      setHasAcceptedTerms(true);
+    }
+  };
 
-const declineTerms = () => {
-  // Log them out if they decline
-  confirmLogout();
-};
+  // ✅ Decline terms function
+  const declineTerms = () => {
+    // Log them out if they decline
+    confirmLogout();
+  };
 
+  // ✅ Show logout confirmation modal
   const logout = () => {
-    setShowLogoutModal(true); // Show custom modal instead of browser popup
+    setShowLogoutModal(true);
   };
   
+  // ✅ Actually log out
   const confirmLogout = () => {
     setUser(null);
     setToken(null);
@@ -76,32 +252,47 @@ const declineTerms = () => {
     localStorage.removeItem('token');
     localStorage.removeItem('user');
     localStorage.removeItem('isAdmin');
-    setShowLogoutModal(false); // ✅ Added missing part
+    setShowLogoutModal(false);
   };
 
-
-  
-  const cancelLogout = () => { // ✅ Added missing function
+  // ✅ Cancel logout
+  const cancelLogout = () => {
     setShowLogoutModal(false);
   };
 
   return (
     <>
-        <AuthContext.Provider value={{ 
-          user, token, isAdmin, login, logout, confirmLogout, cancelLogout, showLogoutModal,
-          showTermsModal, setShowTermsModal
-        }}>
+      <AuthContext.Provider value={{ 
+        user, 
+        token, 
+        isAdmin, 
+        login, 
+        logout, 
+        confirmLogout, 
+        cancelLogout, 
+        showLogoutModal,
+        showTermsModal, 
+        setShowTermsModal,
+        termsContent,
+        setTermsContent,
+        acceptTerms,
+        declineTerms,
+        hasAcceptedTerms
+      }}>
         {children}
       </AuthContext.Provider>
       
-      {showLogoutModal && ( // ✅ Moved inside return statement
+      {/* ✅ LOGOUT CONFIRMATION MODAL */}
+      {showLogoutModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-white rounded-lg p-6 max-w-sm w-full mx-4 shadow-xl">
             <div className="flex items-center mb-4">
               <LogOut className="w-6 h-6 text-red-500 mr-3" />
               <h3 className="text-lg font-semibold text-gray-800">Confirm Logout</h3>
             </div>
-            <p className="text-gray-600 mb-6">Are you sure you want to log out? You'll need to sign in again to access your account.</p>
+            <p className="text-gray-600 mb-6">
+              Are you sure you want to log out? You'll need to sign in again to access your account.
+            </p>
             <div className="flex space-x-3">
               <button
                 onClick={confirmLogout}
@@ -118,44 +309,45 @@ const declineTerms = () => {
             </div>
           </div>
         </div>
-        
       )}
-        {showTermsModal && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-            <div className="bg-white rounded-lg p-6 max-w-lg w-full mx-4 shadow-xl max-h-[80vh] overflow-y-auto">
-              <div className="flex items-center mb-4">
-                <Shield className="w-6 h-6 text-green-600 mr-3" />
-                <h3 className="text-lg font-semibold text-gray-800">Terms and Conditions</h3>
-              </div>
-              <div className="mb-6 p-4 bg-gray-50 rounded-lg max-h-60 overflow-y-auto">
-                <p className="text-gray-700 whitespace-pre-wrap">{termsContent}</p>
-              </div>
-              <p className="text-sm text-gray-600 mb-6">
-                You must accept these terms and conditions to continue using Eco Pantry.
-              </p>
-              <div className="flex space-x-3">
-                <button
-                  onClick={acceptTerms}
-                  className="flex-1 bg-green-600 text-white py-2 px-4 rounded-lg hover:bg-green-700 transition-colors"
-                >
-                  I Accept
-                </button>
-                <button
-                  onClick={declineTerms}
-                  className="flex-1 bg-gray-300 text-gray-700 py-2 px-4 rounded-lg hover:bg-gray-400 transition-colors"
-                >
-                  Decline
-                </button>
-              </div>
+
+      {/* ✅ TERMS AND CONDITIONS MODAL */}
+      {showTermsModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 max-w-lg w-full mx-4 shadow-xl max-h-[80vh] overflow-y-auto">
+            <div className="flex items-center mb-4">
+              <Shield className="w-6 h-6 text-green-600 mr-3" />
+              <h3 className="text-lg font-semibold text-gray-800">Terms and Conditions</h3>
+            </div>
+            <div className="mb-6 p-4 bg-gray-50 rounded-lg max-h-60 overflow-y-auto">
+              <p className="text-gray-700 whitespace-pre-wrap">{termsContent}</p>
+            </div>
+            <p className="text-sm text-gray-600 mb-6">
+              You must accept these terms and conditions to continue using Project GreenHouse.
+            </p>
+            <div className="flex space-x-3">
+              <button
+                onClick={acceptTerms}
+                className="flex-1 bg-green-600 text-white py-2 px-4 rounded-lg hover:bg-green-700 transition-colors"
+              >
+                I Accept
+              </button>
+              <button
+                onClick={declineTerms}
+                className="flex-1 bg-gray-300 text-gray-700 py-2 px-4 rounded-lg hover:bg-gray-400 transition-colors"
+              >
+                Decline
+              </button>
             </div>
           </div>
-        )}
+        </div>
+      )}
     </>
   );
 };
 
-const useAuth = () => useContext(AuthContext);
 
+const useAuth = () => useContext(AuthContext);
 // API Service
 const API_BASE = 'http://localhost:8000';
 
@@ -495,28 +687,101 @@ const GoogleLoginButton = ({ onSuccess, onError }) => {
   return <div id="googleSignInButton"></div>;
 };
 
-// Login Component
-// Login Component
-const Login = () => {
+
+
+
+// User Login Component (Google OAuth only)
+const UserLogin = () => {
   const { login } = useAuth();
-  const [isAdminLogin, setIsAdminLogin] = useState(false);
-  const [adminCredentials, setAdminCredentials] = useState({ username: '', password: '' });
   const [error, setError] = useState('');
-  const [loading, setLoading] = useState(false);
+  const navigate = useNavigate();
 
   const handleGoogleLogin = async (userData, token) => {
     try {
       console.log('Google login success:', userData);
       login(userData, token, false);
+      navigate('/dashboard'); // Redirect to user dashboard
     } catch (error) {
       console.error('Google login error:', error);
       setError('Google login failed: ' + error.message);
     }
   };
 
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-green-50 to-blue-50 flex items-center justify-center p-4">
+      <div className="max-w-md w-full bg-white rounded-lg shadow-lg p-8">
+        {/* User Header */}
+        <div className="text-center mb-8">
+          <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
+            <svg className="w-8 h-8 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.746 0 3.332.477 4.5 1.253v13C19.832 18.477 18.246 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
+            </svg>
+          </div>
+          <h1 className="text-3xl font-bold text-green-800 mb-2">Project GreenHouse</h1>
+          <p className="text-gray-600">Sustainable Exchange Platform for PUP Community</p>
+          <p className="text-sm text-green-600 font-medium mt-2">Student & Faculty Portal</p>
+        </div>
+
+        {/* Error Display */}
+        {error && (
+          <div className="mb-6 p-4 bg-red-50 border border-red-200 text-red-700 rounded-lg">
+            <div className="flex items-center">
+              <svg className="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+              </svg>
+              {error}
+            </div>
+          </div>
+        )}
+
+        {/* Google Login */}
+        <div className="space-y-6">
+          <div className="text-center">
+            <p className="text-gray-600 mb-4">Sign in with your Google account</p>
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-4">
+              <p className="text-blue-800 text-sm">
+                <strong>For PUP Students & Faculty:</strong> Use your institutional or personal Google account
+              </p>
+            </div>
+          </div>
+
+          <GoogleLoginButton 
+            onSuccess={handleGoogleLogin}
+            onError={setError}
+          />
+
+          {/* Features List */}
+          <div className="mt-6 p-4 bg-gray-50 rounded-lg">
+            <h3 className="text-sm font-semibold text-gray-700 mb-2">What you can do:</h3>
+            <ul className="text-xs text-gray-600 space-y-1">
+              <li>• Share items with the PUP community</li>
+              <li>• Claim items from other students</li>
+              <li>• Chat with item owners</li>
+              <li>• Help reduce waste on campus</li>
+            </ul>
+          </div>
+        </div>
+
+        {/* Clean footer - NO admin links */}
+        <div className="mt-8 pt-6 border-t border-gray-200 text-center">
+          <p className="text-xs text-gray-300">© 2025 Project GreenHouse</p>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// Secret Admin Login Component
+const AdminLogin = () => {
+  const { login } = useAuth();
+  const [adminCredentials, setAdminCredentials] = useState({ username: '', password: '' });
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+  const navigate = useNavigate();
+
   const handleAdminLogin = async (e) => {
     e.preventDefault();
-    setError(''); // Clear previous errors
+    setError('');
     setLoading(true);
     
     try {
@@ -532,6 +797,7 @@ const Login = () => {
           google_id: result.user?.user_id || 'admin-user-001'
         };
         login(adminUser, result.access_token, true);
+        navigate('/admin-portal'); // Redirect to admin dashboard
       } else {
         setError('Invalid admin credentials');
       }
@@ -544,89 +810,118 @@ const Login = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-green-50 to-blue-50 flex items-center justify-center p-4">
-      <div className="max-w-md w-full bg-white rounded-lg shadow-lg p-8">
+    <div className="min-h-screen bg-gradient-to-br from-gray-900 to-gray-700 flex items-center justify-center p-4">
+      <div className="max-w-md w-full bg-white rounded-lg shadow-xl p-8">
+        {/* Admin Header */}
         <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-green-800 mb-2">Project GreenHouse</h1>
-          <p className="text-gray-600">Sustainable Exchange Platform for PUP Community</p>
+          <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
+            <Shield className="w-8 h-8 text-red-600" />
+          </div>
+          <h1 className="text-2xl font-bold text-gray-800 mb-2">Admin Portal</h1>
+          <p className="text-gray-600">Project GreenHouse Administration</p>
+          <div className="mt-2 px-3 py-1 bg-red-100 text-red-800 text-xs font-medium rounded-full inline-block">
+            RESTRICTED ACCESS
+          </div>
         </div>
 
-        <div className="flex mb-6">
-          <button
-            onClick={() => setIsAdminLogin(false)}
-            className={`flex-1 py-2 px-4 rounded-l-lg font-medium transition-colors ${
-              !isAdminLogin ? 'bg-green-600 text-white' : 'bg-gray-200 text-gray-700'
-            }`}
-          >
-            Student/Faculty
-          </button>
-          <button
-            onClick={() => setIsAdminLogin(true)}
-            className={`flex-1 py-2 px-4 rounded-r-lg font-medium transition-colors ${
-              isAdminLogin ? 'bg-green-600 text-white' : 'bg-gray-200 text-gray-700'
-            }`}
-          >
-            Admin
-          </button>
-        </div>
-
+        {/* Error Display */}
         {error && (
-          <div className="mb-4 p-3 bg-red-100 border border-red-400 text-red-700 rounded">
-            {error}
+          <div className="mb-6 p-4 bg-red-50 border border-red-200 text-red-700 rounded-lg">
+            <div className="flex items-center">
+              <svg className="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+              </svg>
+              {error}
+            </div>
           </div>
         )}
 
-        {!isAdminLogin ? (
+        {/* Admin Login Form */}
+        <form onSubmit={handleAdminLogin} className="space-y-6">
           <div>
-            <p className="text-center text-gray-600 mb-4">Sign in with your Google account</p>
-            <GoogleLoginButton 
-              onSuccess={handleGoogleLogin}
-              onError={setError}
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Username
+            </label>
+            <input
+              type="text"
+              value={adminCredentials.username}
+              onChange={(e) => setAdminCredentials({...adminCredentials, username: e.target.value})}
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-red-500 transition-colors"
+              required
+              disabled={loading}
+              placeholder="Enter admin username"
             />
           </div>
-        ) : (
-          <form onSubmit={handleAdminLogin}>
-            <div className="mb-4">
-              <label className="block text-gray-700 text-sm font-bold mb-2">
-                Username
-              </label>
-              <input
-                type="text"
-                value={adminCredentials.username}
-                onChange={(e) => setAdminCredentials({...adminCredentials, username: e.target.value})}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-green-500"
-                required
-                disabled={loading}
-              />
-            </div>
-            <div className="mb-6">
-              <label className="block text-gray-700 text-sm font-bold mb-2">
-                Password
-              </label>
-              <input
-                type="password"
-                value={adminCredentials.password}
-                onChange={(e) => setAdminCredentials({...adminCredentials, password: e.target.value})}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-green-500"
-                required
-                disabled={loading}
-              />
-            </div>
-            <button
-              type="submit"
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Password
+            </label>
+            <input
+              type="password"
+              value={adminCredentials.password}
+              onChange={(e) => setAdminCredentials({...adminCredentials, password: e.target.value})}
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-red-500 transition-colors"
+              required
               disabled={loading}
-              className="w-full bg-green-600 text-white py-2 px-4 rounded-lg hover:bg-green-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {loading ? 'Logging in...' : 'Login as Admin'}
-            </button>
-          </form>
-        )}
+              placeholder="Enter admin password"
+            />
+          </div>
+
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full bg-red-600 text-white py-3 px-4 rounded-lg hover:bg-red-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-medium"
+          >
+            {loading ? (
+              <span className="flex items-center justify-center">
+                <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2"></div>
+                Signing in...
+              </span>
+            ) : (
+              <span className="flex items-center justify-center">
+                <Shield className="w-5 h-5 mr-2" />
+                Admin Login
+              </span>
+            )}
+          </button>
+        </form>
+
+        {/* Security Notice */}
+        <div className="mt-6 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+          <div className="flex items-start">
+            <svg className="w-5 h-5 text-yellow-600 mr-2 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+              <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+            </svg>
+            <div>
+              <p className="text-yellow-800 text-sm font-medium">Security Notice</p>
+              <p className="text-yellow-700 text-xs mt-1">
+                Admin access is logged and monitored. Only authorized personnel should access this portal.
+              </p>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );
 };
 
-// Item Card Component
+// Protected Route Component
+const ProtectedRoute = ({ children, adminOnly = false }) => {
+  const { user, token, isAdmin } = useAuth();
+
+  if (!token || !user) {
+    return <Navigate to="/login" replace />;
+  }
+
+  if (adminOnly && !isAdmin) {
+    return <Navigate to="/login" replace />;
+  }
+
+  return children;
+};
+
+
 const ItemCard = ({ item, onClaim, onEdit, onDelete, currentUser, onChatToggle, showChat, chatMessages, onSendMessage, newMessage, setNewMessage }) => {
   const [showClaimModal, setShowClaimModal] = useState(false);
   
@@ -1260,6 +1555,7 @@ const UserDashboard = () => {
   const [newMessages, setNewMessages] = useState({});
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   const [showTermsModal, setShowTermsModal] = useState(false);
+  const { showSuccess, showError, showConfirm } = useNotification();
   // FIXED: Enhanced loadData with better error handling and logging
   const loadData = React.useCallback(async () => {
     console.log('🔄 Loading data... User:', user?.email, 'Token:', !!token);
@@ -1380,22 +1676,18 @@ const UserDashboard = () => {
   }, [filterItems]);
 
   // FIXED: Enhanced item handlers with better error handling
+
   const handleAddItem = async (formData) => {
     try {
-      console.log('➕ Adding item:', formData);
       const result = await apiService.createItem(formData, token);
-      console.log('✅ Item added:', result);
       setShowModal(false);
-      
-      // ✅ NEW: Show custom success modal instead of alert
-      setShowSuccessModal(true);
-      
+      showSuccess('✅ Item submitted for approval!'); // ✅ ADD THIS
       await loadData();
     } catch (error) {
-      console.error('❌ Error adding item:', error);
-      alert('Failed to add item: ' + error.message);
+      showError('❌ Failed to add item: ' + error.message); // ✅ ADD THIS
     }
   };
+  
   const handleEditItem = async (formData) => {
     try {
       console.log('✏️ Editing item:', editingItem?.item_id, formData);
@@ -1411,15 +1703,14 @@ const UserDashboard = () => {
   };
 
   const handleDeleteItem = async (itemId) => {
-    if (window.confirm('Are you sure you want to delete this item?')) {
+    const confirmed = await showConfirm('Delete Item', 'Are you sure you want to delete this item?');
+    if (confirmed) {
       try {
-        console.log('🗑️ Deleting item:', itemId);
         await apiService.deleteItem(itemId, token);
-        console.log('✅ Item deleted');
-        await loadData(); // Reload data
+        showSuccess('Item deleted successfully');
+        await loadData();
       } catch (error) {
-        console.error('❌ Error deleting item:', error);
-        alert('Failed to delete item: ' + error.message);
+        showError('Failed to delete item: ' + error.message);
       }
     }
   };
@@ -1527,6 +1818,12 @@ const UserDashboard = () => {
     );
   };
 
+  const handleLogout = () => {
+    if (window.confirm('Are you sure you want to logout?')) {
+      logout();
+    }
+  };
+
   const handleSendMessage = async (itemId) => {
     const message = newMessages[itemId];
     if (!message?.trim()) {
@@ -1591,12 +1888,13 @@ const UserDashboard = () => {
               </div>
 
               <button
-                onClick={logout}
+                onClick={handleLogout}
                 className="flex items-center px-3 py-2 text-gray-700 hover:text-gray-900 transition-colors"
               >
                 <LogOut className="w-4 h-4 mr-1" />
                 Logout
               </button>
+
             </div>
           </div>
         </div>
@@ -1637,15 +1935,7 @@ const UserDashboard = () => {
             >
               My Claims ({myClaims.length})
             </button>
-            
-            <button
-              onClick={() => setShowTermsModal(true)}
-              className={`flex-1 py-2 px-4 rounded-md font-medium transition-colors ${
-                activeTab === 'claimed' ? 'bg-white text-green-700 shadow-sm' : 'text-gray-600 hover:text-gray-800'
-              }`}
-            >
-              My Claims ({myClaims.length})
-            </button>          
+                     
           </div>
 
           {/* Search and Filters */}
@@ -1737,31 +2027,12 @@ const UserDashboard = () => {
           locations={locations}
           categories={categories}
           />
-        {showSuccessModal && (
-            <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-              <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4 shadow-xl">
-                <div className="flex items-center mb-4">
-                  <div className="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center mr-4">
-                    <Check className="w-6 h-6 text-green-600" />
-                  </div>
-                  <h3 className="text-lg font-semibold text-gray-800">Item Submitted Successfully!</h3>
-                </div>
-                <p className="text-gray-600 mb-6">Your item is now in line for approval. You will be notified once an admin reviews and approves your submission.</p>
-                <div className="flex justify-end">
-                  <button
-                    onClick={() => setShowSuccessModal(false)}
-                    className="bg-green-600 text-white py-2 px-6 rounded-lg hover:bg-green-700 transition-colors"
-                  >
-                    Got it, thanks!
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
+        
         <TermsViewModal
         isOpen={showTermsModal}
         onClose={() => setShowTermsModal(false)}
       />
+      
     </div>
   );
 };
@@ -1784,100 +2055,33 @@ const AdminDashboard = () => {
   const [savingTerms, setSavingTerms] = useState(false);
   const [approvedItems, setApprovedItems] = useState([]);
   const [rejectedItems, setRejectedItems] = useState([]);
+  const { showSuccess, showError, showConfirm, showPrompt } = useNotification(); // ✅ ADD THIS
 
   // FIXED: Enhanced loadData with better error handling
   const loadData = React.useCallback(async () => {
-    console.log('🔄 Admin loading data for tab:', activeTab);
     setLoading(true);
-    
     try {
-      // ✅ ALWAYS load counts for ALL tabs
-      const [usersDataPromise, approvedDataPromise, rejectedDataPromise] = [
-        apiService.getUsers(token),
+      // ALWAYS load everything, regardless of active tab
+      const [pending, users, locations, approved, rejected] = await Promise.all([
+        apiService.getPendingItems(token),
+        apiService.getUsers(token), 
+        apiService.getLocations(),
         apiService.getApprovedItems(token),
         apiService.getRejectedItems(token)
-      ];
+      ]);
       
-      if (activeTab === 'pending') {
-        console.log('📋 Loading pending items...');
-        const [items, usersData, locationsData, approvedData, rejectedData] = await Promise.all([
-          apiService.getPendingItems(token),
-          usersDataPromise,
-          apiService.getLocations(),
-          approvedDataPromise,
-          rejectedDataPromise
-        ]);
-        setPendingItems(Array.isArray(items) ? items : []);
-        setUsers(Array.isArray(usersData) ? usersData : []);
-        setLocations(Array.isArray(locationsData) ? locationsData : []);
-        setApprovedItems(Array.isArray(approvedData) ? approvedData : []);
-        setRejectedItems(Array.isArray(rejectedData) ? rejectedData : []);
-        
-      } else if (activeTab === 'users') {
-        console.log('👥 Loading users...');
-        const [usersData, approvedData, rejectedData] = await Promise.all([
-          usersDataPromise,
-          approvedDataPromise,
-          rejectedDataPromise
-        ]);
-        setUsers(Array.isArray(usersData) ? usersData : []);
-        setApprovedItems(Array.isArray(approvedData) ? approvedData : []);
-        setRejectedItems(Array.isArray(rejectedData) ? rejectedData : []);
-        
-      } else if (activeTab === 'locations') {
-        console.log('📍 Loading locations...');
-        const [locationsData, usersData, approvedData, rejectedData] = await Promise.all([
-          apiService.getLocations(),
-          usersDataPromise,
-          approvedDataPromise,
-          rejectedDataPromise
-        ]);
-        setLocations(Array.isArray(locationsData) ? locationsData : []);
-        setUsers(Array.isArray(usersData) ? usersData : []);
-        setApprovedItems(Array.isArray(approvedData) ? approvedData : []);
-        setRejectedItems(Array.isArray(rejectedData) ? rejectedData : []);
-        
-      } else if (activeTab === 'approved') {
-        console.log('✅ Loading approved items...');
-        const [approvedData, usersData, rejectedData] = await Promise.all([
-          approvedDataPromise,
-          usersDataPromise,
-          rejectedDataPromise
-        ]);
-        setApprovedItems(Array.isArray(approvedData) ? approvedData : []);
-        setUsers(Array.isArray(usersData) ? usersData : []);
-        setRejectedItems(Array.isArray(rejectedData) ? rejectedData : []);
-        
-      } else if (activeTab === 'rejected') {
-        console.log('❌ Loading rejected items...');
-        const [rejectedData, usersData, approvedData] = await Promise.all([
-          rejectedDataPromise,
-          usersDataPromise,
-          approvedDataPromise
-        ]);
-        setRejectedItems(Array.isArray(rejectedData) ? rejectedData : []);
-        setUsers(Array.isArray(usersData) ? usersData : []);
-        setApprovedItems(Array.isArray(approvedData) ? approvedData : []);
-      }
-      
-      console.log('✅ Admin data loaded successfully');
+      setPendingItems(pending || []);
+      setUsers(users || []);
+      setLocations(locations || []);
+      setApprovedItems(approved || []);
+      setRejectedItems(rejected || []);
       
     } catch (error) {
-      console.error('❌ Error loading admin data:', error);
-      // Set empty arrays on error
-      if (activeTab === 'pending') setPendingItems([]);
-      if (activeTab === 'users') setUsers([]);
-      if (activeTab === 'locations') setLocations([]);
-      if (activeTab === 'approved') setApprovedItems([]);
-      if (activeTab === 'rejected') setRejectedItems([]);
-      
-      alert('Failed to load data: ' + error.message);
+      console.error('Error:', error);
     } finally {
       setLoading(false);
     }
-  }, [activeTab, token]);
-
-
+  }, [token]); // Remove activeTab dependency
   useEffect(() => {
     if (token && user) {
       loadData();
@@ -1904,35 +2108,17 @@ const AdminDashboard = () => {
 
   // FIXED: Enhanced item rejection with error handling
   const handleRejectItem = async (itemId) => {
-    const reason = prompt('Enter rejection reason:');
+    const reason = await showPrompt('Reject Item', 'Enter rejection reason:', 'Please provide a reason...');
     if (!reason || !reason.trim()) {
-      console.log('⚠️ No rejection reason provided');
       return;
     }
-  
+    
     try {
-      console.log('❌ Rejecting item:', itemId, 'Reason:', reason);
       await apiService.rejectItem(itemId, reason.trim(), token);
-      console.log('✅ Item rejected successfully');
-      
-      // ✅ BETTER REMOVAL: Filter by exact match
-      setPendingItems(prev => {
-        const filtered = prev.filter(item => {
-          const match = item.item_id === itemId;
-          if (match) {
-            console.log('🗑️ Removing rejected item from pending:', item.name);
-          }
-          return !match;
-        });
-        console.log('📊 Pending items before:', prev.length, 'after:', filtered.length);
-        return filtered;
-      });
-      
-      // Also reload data to be sure
+      showSuccess('Item rejected successfully');
       await loadData();
     } catch (error) {
-      console.error('❌ Error rejecting item:', error);
-      alert('Failed to reject item: ' + error.message);
+      showError('Failed to reject item: ' + error.message);
     }
   };
 
@@ -1966,40 +2152,33 @@ const AdminDashboard = () => {
   };
 
 // Add delete user function with safety checks
-  const handleDeleteUser = async (googleId, userName) => {
-    // First confirmation
-    if (!window.confirm(`⚠️ DANGER: This will permanently delete "${userName}" and ALL their items!\n\nThis action CANNOT be undone. Are you absolutely sure?`)) {
-      return;
-    }
-
-    // Second confirmation - must type exact text
-    const confirmText = prompt(`To confirm deletion, type exactly: DELETE ${userName}`);
-    if (confirmText !== `DELETE ${userName}`) {
-      alert('Deletion cancelled - confirmation text did not match.');
-      return;
-    }
-
-    try {
-      console.log('🗑️ Permanently deleting user:', googleId, userName);
-      
-      // Remove user from UI immediately
-      setUsers(prev => prev.filter(user => (user.google_id || user.user_id) !== googleId));
-      
-      // Try backend deletion
-      try {
-        const result = await apiService.deleteUser(googleId, token);
-        alert(`User "${userName}" deleted with ${result.deleted_items || 0} items.`);
-      } catch (error) {
-        alert(`User "${userName}" removed from interface.`);
-      }
-      
-      // ✅ FORCE RELOAD USERS FROM BACKEND
-      await loadData();
-      
-    } catch (error) {
-      console.error('❌ Error:', error);
-    }
-  };
+const handleDeleteUser = async (googleId, userName) => {
+  const confirmed = await showConfirm(
+    '⚠️ Delete User', 
+    `This will permanently delete "${userName}" and ALL their items! This cannot be undone.`
+  );
+  
+  if (!confirmed) return;
+  
+  const confirmText = await showPrompt(
+    'Final Confirmation', 
+    `Type exactly: DELETE ${userName}`, 
+    'DELETE confirmation...'
+  );
+  
+  if (confirmText !== `DELETE ${userName}`) {
+    showError('Deletion cancelled - confirmation text did not match.');
+    return;
+  }
+  
+  try {
+    await apiService.deleteUser(googleId, token);
+    showSuccess(`User "${userName}" deleted successfully`);
+    await loadData();
+  } catch (error) {
+    showError('Failed to delete user: ' + error.message);
+  }
+};
   
 
   // FIXED: Enhanced location creation with validation
@@ -2061,6 +2240,11 @@ const AdminDashboard = () => {
       alert('Failed to delete location: ' + error.message);
     }
   };
+  const handleLogout = () => {
+    if (window.confirm('Are you sure you want to logout?')) {
+      logout();
+    }
+  };
 
    
   // Loading state
@@ -2091,7 +2275,7 @@ const AdminDashboard = () => {
                 <span className="text-gray-700">{user?.name || 'Admin'}</span>
               </div>
               <button
-                onClick={logout}
+                onClick={handleLogout}
                 className="flex items-center px-3 py-2 text-gray-700 hover:text-gray-900"
               >
                 <LogOut className="w-4 h-4 mr-1" />
@@ -2538,37 +2722,59 @@ const AdminDashboard = () => {
   );
 };
 
-// Main App Component
-// Main App Component - ENHANCED VERSION
+
 const App = () => {
   const { user, isAdmin, token } = useAuth();
   
-  // Show loading while checking auth
-  if (token && !user) {
-    return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-green-600 mx-auto mb-4"></div>
-          <p className="text-gray-600">Checking authentication...</p>
-        </div>
-      </div>
-    );
-  }
-  
-  if (!user) {
-    return <Login />;
-  }
-  
-  return isAdmin ? <AdminDashboard /> : <UserDashboard />;
-};
+  return (
+    <Router>
+      <Routes>
+        {/* Public Routes */}
+        <Route path="/login" element={
+          user ? <Navigate to={isAdmin ? "/admin-portal" : "/dashboard"} replace /> : <UserLogin />
+        } />
+        
+        {/* SECRET Admin Route */}
+        <Route path="/admin-portal-xyz123" element={
+          user && isAdmin ? <Navigate to="/admin-portal" replace /> : <AdminLogin />
+        } />
 
-// Root Component  
+        {/* Protected User Routes */}
+        <Route path="/dashboard" element={
+          <ProtectedRoute>
+            <UserDashboard />
+          </ProtectedRoute>
+        } />
+        
+        <Route path="/" element={
+          <Navigate to={user ? (isAdmin ? "/admin-portal" : "/dashboard") : "/login"} replace />
+        } />
+
+        {/* Protected Admin Routes */}
+        <Route path="/admin-portal" element={
+          <ProtectedRoute adminOnly={true}>
+            <AdminDashboard />
+          </ProtectedRoute>
+        } />
+
+        {/* 404 - Redirect unknown routes */}
+        <Route path="*" element={
+          <Navigate to={user ? (isAdmin ? "/admin-portal" : "/dashboard") : "/login"} replace />
+        } />
+      </Routes>
+    </Router>
+  );
+
+};
+  
 const EcoPantryApp = () => {
   return (
     <AuthProvider>
-      <App />
+      <NotificationProvider>
+        <App />
+      </NotificationProvider>
     </AuthProvider>
   );
 };
 
-export default EcoPantryApp;
+export default EcoPantryApp; // ✅ ADD THIS LINE

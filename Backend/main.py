@@ -644,7 +644,7 @@ async def upload_to_s3(file: UploadFile, folder: str) -> str:
             Body=file_content,
             ContentType=file.content_type or f'image/{file_extension}',
             CacheControl='max-age=31536000',  # Cache for 1 year
-            ACL='public-read'  # Make publicly readable
+            # ACL='public-read'  # Make publicly readable
         )
         
         # Generate public URL
@@ -900,11 +900,13 @@ async def get_pending_items(token_data: dict = Depends(admin_required)):
         
         items = []
         for item in response.get("Items", []):
-            # ✅ BETTER LOGIC: Check for truly pending items
-            approved = item.get("approved")
-            has_rejection = item.get("rejection_reason")
+            # ✅ FIXED LOGIC: Include items that are NOT approved AND have no rejection
+            approved = item.get("approved", False)  # Default False for new items
+            has_rejection = item.get("rejection_reason")  # None for new items
             
-            # Include if: NOT approved AND NO rejection reason
+            print(f"📝 Item: {item.get('name')} - approved: {approved}, rejected: {bool(has_rejection)}")
+            
+            # Include if: NOT approved AND NOT rejected
             if not approved and not has_rejection:
                 formatted_item = {
                     "item_id": item.get("item_id_unique", item.get("user_id", "").replace("ITEM#", "")),
@@ -921,7 +923,7 @@ async def get_pending_items(token_data: dict = Depends(admin_required)):
                     "image_urls": item.get("image_urls", [])
                 }
                 items.append(formatted_item)
-                print(f"📝 Including pending item: {item.get('name')} (approved: {approved}, rejected: {bool(has_rejection)})")
+                print(f"✅ Including pending item: {item.get('name')}")
             else:
                 print(f"⏭️ Skipping processed item: {item.get('name')} (approved: {approved}, rejected: {bool(has_rejection)})")
         
@@ -930,7 +932,11 @@ async def get_pending_items(token_data: dict = Depends(admin_required)):
         
     except Exception as e:
         print(f"❌ Error getting pending items: {e}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
+
 
 
 @app.get("/admin/items/approved")
