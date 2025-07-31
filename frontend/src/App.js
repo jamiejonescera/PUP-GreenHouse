@@ -5,6 +5,23 @@ import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate } from 'r
 // Auth Context
 const AuthContext = createContext();
 
+// 1. Get the API URL from environment variables (in .env file)
+const API_URL = process.env.REACT_APP_API_URL;
+
+// 2. Function that sends an HTTP request to your FastAPI backend
+export async function fetchData() {
+  const res = await fetch(`${API_URL}your-endpoint`, {
+    method: "GET",               // or "POST", "PUT", etc.
+    headers: {
+      "Content-Type": "application/json" // Tells the server you're sending JSON
+    }
+  });
+
+  // 3. Parse the server's JSON response and return it
+  return await res.json();
+}
+
+
 // STEP 1: Add this RIGHT AFTER your AuthContext (around line 60 in App.js)
 
 // Add this AFTER the AuthProvider component:
