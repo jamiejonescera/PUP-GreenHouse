@@ -737,14 +737,15 @@ const UserLogin = () => {
         {/* Google Login */}
         <div className="space-y-6">
           <div className="text-center">
-            <p className="text-gray-600 mb-4">Sign in with your Google account</p>
+            <p className="text-gray-600 mb-4">Sign in with your Google accou1</p>
           </div>
 
-          <GoogleLoginButton 
-            onSuccess={handleGoogleLogin}
-            onError={setError}
-          />
-
+            <div className="flex justify-center">
+              <GoogleLoginButton 
+                onSuccess={handleGoogleLogin}
+                onError={setError}
+              />
+            </div>
           {/* Features List */}
           <div className="mt-6 p-4 bg-gray-50 rounded-lg">
             <h3 className="text-sm font-semibold text-gray-700 mb-2">What you can do:</h3>
