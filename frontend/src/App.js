@@ -349,7 +349,7 @@ const AuthProvider = ({ children }) => {
 
 const useAuth = () => useContext(AuthContext);
 // API Service
-const API_BASE = 'http://localhost:8000';
+const API_BASE = 'https://grcal5qmnhiq54qfyc37tzyxe0knzdz.lambda-url.ap-northeast-1.on.aws';
 
 const apiService = {
   // Auth endpoints
