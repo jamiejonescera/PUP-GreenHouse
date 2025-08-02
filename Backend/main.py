@@ -14,6 +14,7 @@ import os
 from mangum import Mangum
 import jwt
 from botocore.config import Config
+import google.generativeai as genai
 
 # Initialize FastAPI app
 app = FastAPI(title="Eco Pantry API", version="1.0.0")
@@ -31,6 +32,8 @@ AWS_REGION = "ap-northeast-1"
 DYNAMODB_TABLE = "aws-fb-db-dynamo"
 S3_BUCKET = "aws-fb-db-s3"
 
+
+
 # Correct config without use_ssl
 config = Config(
     signature_version='v4',
@@ -46,6 +49,15 @@ try:
     print("✅ AWS clients initialized successfully")
 except Exception as e:
     print(f"❌ Error initializing AWS clients: {e}")
+
+try:
+    GEMINI_API_KEY = "AIzaSyB8y7CIffxUNI8CMnlrtcntpp7tJ7JeFYk"
+    genai.configure(api_key=GEMINI_API_KEY)
+    model = genai.GenerativeModel('gemini-1.5-flash')
+    print("✅ Gemini AI initialized successfully")
+except Exception as e:
+    print(f"❌ Error initializing Gemini AI: {e}")
+    model = None
 
 # Security
 security = HTTPBearer()
@@ -1606,6 +1618,100 @@ async def get_categories():
         "Cardboard",
         "Other"
     ]
+
+@app.post("/get-ai-recommendations")
+async def get_ai_recommendations(token_data: dict = Depends(verify_token)):
+    """Get AI recommendations based on available recyclable materials"""
+    try:
+        print(f"🤖 Getting AI recommendations for user: {token_data.get('user_id')}")
+        
+        if not model:
+            return {"success": False, "error": "AI service not available"}
+        
+        # Get user info for personalization
+        user_response = table.get_item(Key={"user_id": token_data["user_id"], "item_id": "PROFILE"})
+        user_name = "Friend"
+        if "Item" in user_response:
+            user_name = user_response["Item"].get("name", "Friend").split()[0]
+        
+        # Get current approved items (NO LIMIT!)
+        response = table.scan(
+            FilterExpression="begins_with(user_id, :item_prefix) AND item_id = :details AND approved = :approved",
+            ExpressionAttributeValues={":item_prefix": "ITEM#", ":details": "DETAILS", ":approved": True}
+        )
+        
+        current_items = response.get("Items", [])
+        
+        # Create materials context with ALL items (not just 15)
+        materials_context = "\n".join([f"- {item.get('name', '')} ({item.get('category', '')})" for item in current_items])
+        
+        # Calculate suggestions count based on items (but reasonable limits)
+        items_count = len(current_items)
+        if items_count <= 5:
+            suggestions_count = "3-5"
+        elif items_count <= 15:
+            suggestions_count = "7-10"
+        elif items_count <= 30:
+            suggestions_count = "10-15"
+        else:
+            suggestions_count = "15-20"
+        
+        # Check if Christmas season
+        current_month = datetime.now().month
+        is_christmas = current_month in [11, 12, 1]
+        
+        prompt = f"""Hello {user_name}! 👋
+
+Welcome to GreenHouse AI! Here are ALL {items_count} recyclable materials from your PUP community:
+
+{materials_context}
+
+Based on these {items_count} available materials, give {suggestions_count} creative Filipino ways to reuse them:
+
+{"🎄 Include Christmas parol ideas since it's Christmas season!" if is_christmas else ""}
+
+Make the suggestions practical and versatile for:
+- Home use (any living situation)
+- School projects and activities 
+- Community events and celebrations
+- Creative arts and crafts
+- Practical everyday solutions
+
+Group similar materials together and suggest combination projects when possible.
+Be specific about which items from the list to use for each suggestion.
+
+
+Format your response cleanly with numbered suggestions (1, 2, 3...) without asterisks or special formatting.
+Group similar materials together and suggest combination projects when possible.
+Be specific about which items from the list to use for each suggestion.
+
+Use simple, clean formatting - no asterisks, no bold markers, just clear numbered lists."""
+        
+        response = model.generate_content(
+            prompt,
+            generation_config={
+                'max_output_tokens': 2000,
+                'temperature': 0.8,
+            }
+        )
+        
+        # Clean up the formatting
+        ai_text = response.text
+        ai_text = ai_text.replace('**', '')   # Remove double asterisks
+        ai_text = ai_text.replace('***', '')  # Remove triple asterisks
+        ai_text = ai_text.replace('*', '')    # Remove single asterisks
+        
+        return {
+            "success": True,
+            "recommendations": ai_text,  # Use cleaned text instead of response.text
+            "available_items_count": len(current_items),
+            "suggestions_count": suggestions_count
+        }
+        
+    except Exception as e:
+        print(f"❌ AI error: {e}")
+        return {"success": False, "error": str(e)}
+
 
 # Debug endpoints
 @app.get("/debug/admin-items")

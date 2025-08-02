@@ -5,23 +5,6 @@ import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate } from 'r
 // Auth Context
 const AuthContext = createContext();
 
-// 1. Get the API URL from environment variables (in .env file)
-const API_URL = process.env.REACT_APP_API_URL;
-
-// 2. Function that sends an HTTP request to your FastAPI backend
-export async function fetchData() {
-  const res = await fetch(`${API_URL}your-endpoint`, {
-    method: "GET",               // or "POST", "PUT", etc.
-    headers: {
-      "Content-Type": "application/json" // Tells the server you're sending JSON
-    }
-  });
-
-  // 3. Parse the server's JSON response and return it
-  return await res.json();
-}
-
-
 // STEP 1: Add this RIGHT AFTER your AuthContext (around line 60 in App.js)
 
 // Add this AFTER the AuthProvider component:
@@ -678,7 +661,7 @@ const GoogleLoginButton = ({ onSuccess, onError }) => {
           };
           onSuccess(userForApp, result.access_token);
         } else {
-          onError('Login failed: No access token received');
+          onError('Login failed: Sorry You Have Been Reported for Pranking a User');
         }
       } catch (error) {
         console.error('Google login error:', error);
@@ -1573,7 +1556,10 @@ const UserDashboard = () => {
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   const [showTermsModal, setShowTermsModal] = useState(false);
   const { showSuccess, showError, showConfirm } = useNotification();
-  // FIXED: Enhanced loadData with better error handling and logging
+  const [aiRecommendations, setAiRecommendations] = useState('');
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState('');
+
   const loadData = React.useCallback(async () => {
     console.log('🔄 Loading data... User:', user?.email, 'Token:', !!token);
     
@@ -1835,10 +1821,41 @@ const UserDashboard = () => {
     );
   };
 
-  const handleLogout = () => {
-    if (window.confirm('Are you sure you want to logout?')) {
-      logout();
+  // Add this function with your other handlers:
+const handleGetAIRecommendations = async () => {
+  setAiLoading(true);
+  setAiError('');
+  
+  try {
+    console.log('🤖 Getting AI recommendations...');
+    const response = await fetch(`${API_BASE}/get-ai-recommendations`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      body: JSON.stringify({})
+    });
+    
+    const data = await response.json();
+    console.log('🤖 AI response:', data);
+    
+    if (data.success) {
+      setAiRecommendations(data.recommendations);
+      showSuccess('AI recommendations loaded! 🌱');
+    } else {
+      setAiError(data.error || 'Failed to get recommendations');
     }
+  } catch (error) {
+    console.error('🤖 AI error:', error);
+    setAiError('Failed to connect to AI service');
+  } finally {
+    setAiLoading(false);
+  }
+};
+  
+  const handleLogout = () => {
+    logout(); 
   };
 
   const handleSendMessage = async (itemId) => {
@@ -1952,7 +1969,14 @@ const UserDashboard = () => {
             >
               My Claims ({myClaims.length})
             </button>
-                     
+            <button
+              onClick={() => setActiveTab('ai-recommendations')}
+              className={`flex-1 py-2 px-4 rounded-md font-medium transition-colors ${
+                activeTab === 'ai-recommendations' ? 'bg-white text-green-700 shadow-sm' : 'text-gray-600 hover:text-gray-800'
+              }`}
+            >
+              AI Recommendations
+            </button>
           </div>
 
           {/* Search and Filters */}
@@ -1998,38 +2022,106 @@ const UserDashboard = () => {
         </div>
 
         {/* Items Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {filteredItems.map(item => (
-            <ItemCard
-              key={item.item_id}
-              item={item}
-              currentUser={user}
-              onClaim={handleClaimItem}
-              onEdit={setEditingItem}
-              onDelete={handleDeleteItem}
-              onChatToggle={handleChatToggle}
-              showChat={chatState[item.item_id]}
-              chatMessages={chatMessages[item.item_id] || []}
-              onSendMessage={() => handleSendMessage(item.item_id)}
-              newMessage={newMessages[item.item_id] || ''}
-              setNewMessage={(message) => setNewMessages(prev => ({
-                ...prev,
-                [item.item_id]: message
-              }))}
-            />
-          ))}
-        </div>
+        {activeTab !== 'ai-recommendations' && (
+          <>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {filteredItems.map(item => (
+                <ItemCard
+                  key={item.item_id}
+                  item={item}
+                  currentUser={user}
+                  onClaim={handleClaimItem}
+                  onEdit={setEditingItem}
+                  onDelete={handleDeleteItem}
+                  onChatToggle={handleChatToggle}
+                  showChat={chatState[item.item_id]}
+                  chatMessages={chatMessages[item.item_id] || []}
+                  onSendMessage={() => handleSendMessage(item.item_id)}
+                  newMessage={newMessages[item.item_id] || ''}
+                  setNewMessage={(message) => setNewMessages(prev => ({
+                    ...prev,
+                    [item.item_id]: message
+                  }))}
+                />
+              ))}
+            </div>
 
-        {filteredItems.length === 0 && (
-          <div className="text-center py-12">
-            <p className="text-gray-500 text-lg">
-              {loading ? 'Loading items...' : 'No items found'}
-            </p>
-            {activeTab === 'all' && !loading && (
-              <p className="text-gray-400 mt-2">Be the first to add an item to the community!</p>
+            {filteredItems.length === 0 && (
+              <div className="text-center py-12">
+                <p className="text-gray-500 text-lg">
+                  {loading ? 'Loading items...' : 'No items found'}
+                </p>
+                {activeTab === 'all' && !loading && (
+                  <p className="text-gray-400 mt-2">Be the first to add an item to the community!</p>
+                )}
+              </div>
+            )}
+          </>
+        )}
+
+ {/* 🤖 ADD THE AI CONTENT RIGHT HERE - AFTER THE ITEMS GRID */}
+ {activeTab === 'ai-recommendations' && (
+          <div className="space-y-6">
+            <div className="text-center">
+              <h2 className="text-2xl font-bold text-green-800 mb-4">
+                AI Recommendations
+              </h2>
+              <p className="text-gray-600 mb-6">
+                Get creative suggestions on how to reuse recyclable materials from your PUP community!
+              </p>
+              
+              <button
+                onClick={handleGetAIRecommendations}
+                disabled={aiLoading}
+                className="px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {aiLoading ? (
+                  <span className="flex items-center justify-center">
+                    <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2"></div>
+                    Getting Suggestions...
+                  </span>
+                ) : (
+                  '🌱 Get Smart Suggestions'
+                )}
+              </button>
+            </div>
+
+            {/* AI Response */}
+            {aiRecommendations && (
+              <div className="bg-white rounded-lg shadow-md p-6">
+                <div className="whitespace-pre-wrap text-gray-700 leading-relaxed">
+                  {aiRecommendations}
+                </div>
+              </div>
+            )}
+
+            {/* Error Display */}
+            {aiError && (
+              <div className="bg-red-50 border border-red-200 text-red-700 rounded-lg p-4">
+                <div className="flex items-center">
+                  <svg className="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                  </svg>
+                  {aiError}
+                </div>
+              </div>
+            )}
+
+            {/* No recommendations yet */}
+            {!aiRecommendations && !aiLoading && !aiError && (
+              <div className="text-center py-12">
+                <div className="text-6xl mb-4">🤖</div>
+                <p className="text-gray-500 text-lg">
+                  Click the button above to get personalized recycling suggestions!
+                </p>
+                <p className="text-gray-400 text-sm mt-2">
+                  Our AI will analyze available materials and give you creative Filipino ideas!
+                </p>
+              </div>
             )}
           </div>
         )}
+
       </div>
 
         {/* Add/Edit Modal */}
@@ -2258,9 +2350,7 @@ const handleDeleteUser = async (googleId, userName) => {
     }
   };
   const handleLogout = () => {
-    if (window.confirm('Are you sure you want to logout?')) {
-      logout();
-    }
+    logout(); // ✅ Just call logout - your custom modal will handle confirmation
   };
 
    
@@ -2783,7 +2873,7 @@ const App = () => {
   );
 
 };
-  
+
 const EcoPantryApp = () => {
   return (
     <AuthProvider>
@@ -2794,4 +2884,4 @@ const EcoPantryApp = () => {
   );
 };
 
-export default EcoPantryApp; // ✅ ADD THIS LINE
+export default EcoPantryApp; 
