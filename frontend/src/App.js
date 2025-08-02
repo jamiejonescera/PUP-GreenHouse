@@ -738,12 +738,15 @@ const UserLogin = () => {
         <div className="space-y-6">
           <div className="text-center">
             <p className="text-gray-600 mb-4">Sign in with your Google account</p>
-          </div>
-
-          <GoogleLoginButton 
+          
+            <GoogleLoginButton 
             onSuccess={handleGoogleLogin}
             onError={setError}
           />
+
+
+          </div>
+
 
           {/* Features List */}
           <div className="mt-6 p-4 bg-gray-50 rounded-lg">
