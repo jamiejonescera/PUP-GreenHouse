@@ -737,7 +737,7 @@ const UserLogin = () => {
         {/* Google Login */}
         <div className="space-y-6">
           <div className="text-center">
-            <p className="text-gray-600 mb-4">Sign in with your Google accou1</p>
+            <p className="text-gray-600 mb-4">Sign in with your Google account</p>
           </div>
 
             <div className="flex justify-center">
