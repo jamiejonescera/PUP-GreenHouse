@@ -738,11 +738,6 @@ const UserLogin = () => {
         <div className="space-y-6">
           <div className="text-center">
             <p className="text-gray-600 mb-4">Sign in with your Google account</p>
-            <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-4">
-              <p className="text-blue-800 text-sm">
-                <strong>For PUP Students & Faculty:</strong> Use your institutional or personal Google account
-              </p>
-            </div>
           </div>
 
           <GoogleLoginButton 
