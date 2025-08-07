@@ -349,7 +349,8 @@ const AuthProvider = ({ children }) => {
 
 const useAuth = () => useContext(AuthContext);
 // API Service
-const API_BASE = 'https://grcal5qmrihig54qfyc37tzyxe0knzdz.lambda-url.ap-northeast-1.on.aws';
+// const API_BASE = 'https://grcal5qmrihig54qfyc37tzyxe0knzdz.lambda-url.ap-northeast-1.on.aws';
+const API_BASE = 'http://localhost:8000';  // For local testing
 
 const apiService = {
   // Auth endpoints
@@ -768,12 +769,36 @@ const UserLogin = () => {
 };
 
 // Secret Admin Login Component
+// Add these new components to your App.js file
+
+// 1. REPLACE your existing AdminLogin component with this enhanced version:
+
 const AdminLogin = () => {
   const { login } = useAuth();
-  const [adminCredentials, setAdminCredentials] = useState({ username: '', password: '' });
+  const [adminCredentials, setAdminCredentials] = useState({ email: '', password: '' });
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [showSetup, setShowSetup] = useState(false);
+  const [checkingSetup, setCheckingSetup] = useState(true);
   const navigate = useNavigate();
+
+  // Check if admin setup is needed
+  useEffect(() => {
+    checkAdminSetup();
+  }, []);
+
+  const checkAdminSetup = async () => {
+    try {
+      const response = await fetch(`${API_BASE}/admin/setup/check`);
+      const result = await response.json();
+      setShowSetup(result.first_time_setup);
+    } catch (error) {
+      console.error('Error checking admin setup:', error);
+      setShowSetup(true); // Assume setup needed if error
+    } finally {
+      setCheckingSetup(false);
+    }
+  };
 
   const handleAdminLogin = async (e) => {
     e.preventDefault();
@@ -781,21 +806,26 @@ const AdminLogin = () => {
     setLoading(true);
     
     try {
-      console.log('Attempting admin login...');
-      const result = await apiService.adminLogin(adminCredentials);
-      console.log('Admin login result:', result);
+      console.log('Attempting new admin login...');
+      const response = await fetch(`${API_BASE}/admin/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(adminCredentials)
+      });
       
-      if (result.access_token) {
+      const result = await response.json();
+      
+      if (response.ok && result.access_token) {
         const adminUser = {
           name: result.user?.name || 'Administrator',
-          email: result.user?.email || 'admin@ecopantry.com',
+          email: result.user?.email || adminCredentials.email,
           user_id: result.user?.user_id || 'admin-user-001',
           google_id: result.user?.user_id || 'admin-user-001'
         };
         login(adminUser, result.access_token, true);
-        navigate('/admin-portal'); // Redirect to admin dashboard
+        navigate('/admin-portal');
       } else {
-        setError('Invalid admin credentials');
+        setError(result.error || result.detail || 'Login failed');
       }
     } catch (error) {
       console.error('Admin login error:', error);
@@ -804,6 +834,18 @@ const AdminLogin = () => {
       setLoading(false);
     }
   };
+
+  if (checkingSetup) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-gray-900 to-gray-700 flex items-center justify-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-white"></div>
+      </div>
+    );
+  }
+
+  if (showSetup) {
+    return <AdminSetup onSetupComplete={() => setShowSetup(false)} />;
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-900 to-gray-700 flex items-center justify-center p-4">
@@ -816,7 +858,7 @@ const AdminLogin = () => {
           <h1 className="text-2xl font-bold text-gray-800 mb-2">Admin Portal</h1>
           <p className="text-gray-600">Project GreenHouse Administration</p>
           <div className="mt-2 px-3 py-1 bg-red-100 text-red-800 text-xs font-medium rounded-full inline-block">
-            RESTRICTED ACCESS
+            SECURE ACCESS
           </div>
         </div>
 
@@ -836,16 +878,16 @@ const AdminLogin = () => {
         <form onSubmit={handleAdminLogin} className="space-y-6">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
-              Username
+              Email Address
             </label>
             <input
-              type="text"
-              value={adminCredentials.username}
-              onChange={(e) => setAdminCredentials({...adminCredentials, username: e.target.value})}
+              type="email"
+              value={adminCredentials.email}
+              onChange={(e) => setAdminCredentials({...adminCredentials, email: e.target.value})}
               className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-red-500 transition-colors"
               required
               disabled={loading}
-              placeholder="Enter admin username"
+              placeholder="Enter admin email"
             />
           </div>
 
@@ -881,18 +923,184 @@ const AdminLogin = () => {
               </span>
             )}
           </button>
+
+          {/* Forgot Password Link */}
+          <div className="text-center">
+            <button
+              type="button"
+              onClick={() => navigate('/admin-forgot-password')}
+              className="text-red-600 hover:text-red-800 text-sm transition-colors"
+            >
+              Forgot your password?
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+};
+
+// 2. ADD this new AdminSetup component:
+
+const AdminSetup = ({ onSetupComplete }) => {
+  const [setupData, setSetupData] = useState({
+    name: '',
+    email: '',
+    password: '',
+    confirmPassword: ''
+  });
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const handleSetup = async (e) => {
+    e.preventDefault();
+    setError('');
+
+    // Validation
+    if (setupData.password !== setupData.confirmPassword) {
+      setError('Passwords do not match');
+      return;
+    }
+
+    if (setupData.password.length < 8) {
+      setError('Password must be at least 8 characters');
+      return;
+    }
+
+    setLoading(true);
+
+    try {
+      const response = await fetch(`${API_BASE}/admin/setup`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: setupData.name,
+          email: setupData.email,
+          password: setupData.password
+        })
+      });
+
+      const result = await response.json();
+
+      if (result.success) {
+        alert('Admin account created successfully! You can now log in.');
+        onSetupComplete();
+      } else {
+        setError(result.error || 'Setup failed');
+      }
+    } catch (error) {
+      console.error('Setup error:', error);
+      setError('Setup failed: ' + error.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-blue-900 to-purple-900 flex items-center justify-center p-4">
+      <div className="max-w-md w-full bg-white rounded-lg shadow-xl p-8">
+        <div className="text-center mb-8">
+          <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4">
+            <Shield className="w-8 h-8 text-blue-600" />
+          </div>
+          <h1 className="text-2xl font-bold text-gray-800 mb-2">First-Time Setup</h1>
+          <p className="text-gray-600">Create your admin account for Project GreenHouse</p>
+        </div>
+
+        {error && (
+          <div className="mb-6 p-4 bg-red-50 border border-red-200 text-red-700 rounded-lg text-sm">
+            {error}
+          </div>
+        )}
+
+        <form onSubmit={handleSetup} className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Full Name *
+            </label>
+            <input
+              type="text"
+              value={setupData.name}
+              onChange={(e) => setSetupData({...setupData, name: e.target.value})}
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              required
+              disabled={loading}
+              placeholder="Enter your full name"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Email Address *
+            </label>
+            <input
+              type="email"
+              value={setupData.email}
+              onChange={(e) => setSetupData({...setupData, email: e.target.value})}
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              required
+              disabled={loading}
+              placeholder="Enter admin email"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Password *
+            </label>
+            <input
+              type="password"
+              value={setupData.password}
+              onChange={(e) => setSetupData({...setupData, password: e.target.value})}
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              required
+              disabled={loading}
+              placeholder="Create a strong password"
+              minLength={8}
+            />
+            <p className="text-xs text-gray-500 mt-1">Must be at least 8 characters with uppercase, lowercase, and numbers</p>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Confirm Password *
+            </label>
+            <input
+              type="password"
+              value={setupData.confirmPassword}
+              onChange={(e) => setSetupData({...setupData, confirmPassword: e.target.value})}
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              required
+              disabled={loading}
+              placeholder="Confirm your password"
+            />
+          </div>
+
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full bg-blue-600 text-white py-3 px-4 rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 font-medium mt-6"
+          >
+            {loading ? (
+              <span className="flex items-center justify-center">
+                <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2"></div>
+                Creating Account...
+              </span>
+            ) : (
+              'Create Admin Account'
+            )}
+          </button>
         </form>
 
-        {/* Security Notice */}
         <div className="mt-6 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
           <div className="flex items-start">
             <svg className="w-5 h-5 text-yellow-600 mr-2 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
               <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
             </svg>
             <div>
-              <p className="text-yellow-800 text-sm font-medium">Security Notice</p>
+              <p className="text-yellow-800 text-sm font-medium">Important</p>
               <p className="text-yellow-700 text-xs mt-1">
-                Admin access is logged and monitored. Only authorized personnel should access this portal.
+                This will be the only admin account. Keep your credentials secure!
               </p>
             </div>
           </div>
@@ -901,6 +1109,478 @@ const AdminLogin = () => {
     </div>
   );
 };
+
+// 3. ADD this AdminProfile component (to be used in AdminDashboard):
+
+const AdminProfile = ({ onClose }) => {
+  const { user, token } = useAuth();
+  const [profileData, setProfileData] = useState({
+    current_email: user?.email || '',
+    new_name: user?.name || '',
+    new_email: user?.email || '',
+    new_password: '',
+    confirm_password: ''
+  });
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+
+  const handleUpdateProfile = async (e) => {
+    e.preventDefault();
+    setError('');
+    setSuccess('');
+
+    if (profileData.new_password && profileData.new_password !== profileData.confirm_password) {
+      setError('Passwords do not match');
+      return;
+    }
+
+    setLoading(true);
+
+    try {
+      const updateData = {
+        current_email: profileData.current_email,
+        new_name: profileData.new_name !== user?.name ? profileData.new_name : null,
+        new_email: profileData.new_email !== user?.email ? profileData.new_email : null,
+        new_password: profileData.new_password || null
+      };
+
+      // Remove null values
+      Object.keys(updateData).forEach(key => {
+        if (updateData[key] === null) delete updateData[key];
+      });
+
+      const response = await fetch(`${API_BASE}/admin/profile`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify(updateData)
+      });
+
+      const result = await response.json();
+
+      if (result.success) {
+        setSuccess('Profile updated successfully!');
+        setTimeout(() => {
+          onClose();
+          // You might want to refresh the page or update the user context here
+        }, 2000);
+      } else {
+        setError(result.error || 'Update failed');
+      }
+    } catch (error) {
+      console.error('Profile update error:', error);
+      setError('Update failed: ' + error.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-lg shadow-xl max-w-md w-full max-h-[90vh] overflow-y-auto">
+        <div className="p-6">
+          <div className="flex justify-between items-center mb-6">
+            <h2 className="text-xl font-bold text-gray-800">Admin Profile Settings</h2>
+            <button
+              onClick={onClose}
+              className="text-gray-400 hover:text-gray-600 transition-colors"
+            >
+              <X className="w-6 h-6" />
+            </button>
+          </div>
+
+          {error && (
+            <div className="mb-4 p-3 bg-red-100 border border-red-400 text-red-700 rounded text-sm">
+              {error}
+            </div>
+          )}
+
+          {success && (
+            <div className="mb-4 p-3 bg-green-100 border border-green-400 text-green-700 rounded text-sm">
+              {success}
+            </div>
+          )}
+
+          <form onSubmit={handleUpdateProfile} className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Name
+              </label>
+              <input
+                type="text"
+                value={profileData.new_name}
+                onChange={(e) => setProfileData({...profileData, new_name: e.target.value})}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-blue-500"
+                required
+                disabled={loading}
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Email Address
+              </label>
+              <input
+                type="email"
+                value={profileData.new_email}
+                onChange={(e) => setProfileData({...profileData, new_email: e.target.value})}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-blue-500"
+                required
+                disabled={loading}
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                New Password (optional)
+              </label>
+              <input
+                type="password"
+                value={profileData.new_password}
+                onChange={(e) => setProfileData({...profileData, new_password: e.target.value})}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-blue-500"
+                disabled={loading}
+                placeholder="Leave blank to keep current password"
+                minLength={8}
+              />
+            </div>
+
+            {profileData.new_password && (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Confirm New Password
+                </label>
+                <input
+                  type="password"
+                  value={profileData.confirm_password}
+                  onChange={(e) => setProfileData({...profileData, confirm_password: e.target.value})}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-blue-500"
+                  disabled={loading}
+                  placeholder="Confirm new password"
+                />
+              </div>
+            )}
+
+            <div className="flex space-x-3 pt-4">
+              <button
+                type="submit"
+                disabled={loading}
+                className="flex-1 bg-blue-600 text-white py-2 px-4 rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50"
+              >
+                {loading ? (
+                  <span className="flex items-center justify-center">
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                    Updating...
+                  </span>
+                ) : (
+                  'Update Profile'
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={onClose}
+                disabled={loading}
+                className="flex-1 bg-gray-300 text-gray-700 py-2 px-4 rounded-lg hover:bg-gray-400 transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+
+
+
+// ADD these two missing components before your App component:
+
+const AdminForgotPassword = () => {
+  const [email, setEmail] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [success, setSuccess] = useState(false);
+  const [error, setError] = useState('');
+  const navigate = useNavigate();
+
+  const handleForgotPassword = async (e) => {
+    e.preventDefault();
+    setError('');
+    setLoading(true);
+
+    try {
+      const response = await fetch(`${API_BASE}/admin/forgot-password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email })
+      });
+
+      const result = await response.json();
+
+      if (result.success) {
+        setSuccess(true);
+      } else {
+        setError(result.error || 'Failed to send reset email');
+      }
+    } catch (error) {
+      console.error('Forgot password error:', error);
+      setError('Failed to send reset email');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (success) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-gray-900 to-gray-700 flex items-center justify-center p-4">
+        <div className="max-w-md w-full bg-white rounded-lg shadow-xl p-8 text-center">
+          <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
+            <svg className="w-8 h-8 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+            </svg>
+          </div>
+          <h2 className="text-2xl font-bold text-gray-800 mb-4">Check Your Email</h2>
+          <p className="text-gray-600 mb-6">
+            If an admin account exists with that email, we've sent you a password reset link.
+          </p>
+          <button
+            onClick={() => navigate('/admin-portal-xyz123')}
+            className="w-full bg-gray-600 text-white py-3 px-4 rounded-lg hover:bg-gray-700 transition-colors"
+          >
+            Back to Login
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-gray-900 to-gray-700 flex items-center justify-center p-4">
+      <div className="max-w-md w-full bg-white rounded-lg shadow-xl p-8">
+        <div className="text-center mb-8">
+          <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4">
+            <svg className="w-8 h-8 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 7a2 2 0 012 2m0 0a2 2 0 012 2v6a2 2 0 01-2 2H7a2 2 0 01-2-2V9a2 2 0 012-2m0 0V7a2 2 0 012-2m4 0V5a2 2 0 00-2-2H9a2 2 0 00-2 2v2m8 0V9a2 2 0 00-2-2H9a2 2 0 00-2 2v8a2 2 0 002 2h6a2 2 0 002-2V9z" />
+            </svg>
+          </div>
+          <h1 className="text-2xl font-bold text-gray-800 mb-2">Reset Password</h1>
+          <p className="text-gray-600">Enter your admin email to receive a reset link</p>
+        </div>
+
+        {error && (
+          <div className="mb-6 p-4 bg-red-50 border border-red-200 text-red-700 rounded-lg text-sm">
+            {error}
+          </div>
+        )}
+
+        <form onSubmit={handleForgotPassword} className="space-y-6">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Admin Email Address
+            </label>
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              required
+              disabled={loading}
+              placeholder="Enter your admin email"
+            />
+          </div>
+
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full bg-blue-600 text-white py-3 px-4 rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 font-medium"
+          >
+            {loading ? (
+              <span className="flex items-center justify-center">
+                <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2"></div>
+                Sending Reset Link...
+              </span>
+            ) : (
+              'Send Reset Link'
+            )}
+          </button>
+
+          <div className="text-center">
+            <button
+              type="button"
+              onClick={() => navigate('/admin-portal-xyz123')}
+              className="text-gray-600 hover:text-gray-800 text-sm transition-colors"
+            >
+              Back to Login
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+};
+
+const AdminResetPassword = () => {
+  const [passwords, setPasswords] = useState({
+    new_password: '',
+    confirm_password: ''
+  });
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState(false);
+  const navigate = useNavigate();
+  
+  // Get token from URL
+  const urlParams = new URLSearchParams(window.location.search);
+  const token = urlParams.get('token');
+
+  useEffect(() => {
+    if (!token) {
+      setError('Invalid reset link');
+    }
+  }, [token]);
+
+  const handleResetPassword = async (e) => {
+    e.preventDefault();
+    setError('');
+
+    if (passwords.new_password !== passwords.confirm_password) {
+      setError('Passwords do not match');
+      return;
+    }
+
+    if (passwords.new_password.length < 8) {
+      setError('Password must be at least 8 characters');
+      return;
+    }
+
+    setLoading(true);
+
+    try {
+      const response = await fetch(`${API_BASE}/admin/reset-password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          token,
+          new_password: passwords.new_password
+        })
+      });
+
+      const result = await response.json();
+
+      if (result.success) {
+        setSuccess(true);
+      } else {
+        setError(result.error || 'Password reset failed');
+      }
+    } catch (error) {
+      console.error('Reset password error:', error);
+      setError('Password reset failed');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (success) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-gray-900 to-gray-700 flex items-center justify-center p-4">
+        <div className="max-w-md w-full bg-white rounded-lg shadow-xl p-8 text-center">
+          <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
+            <svg className="w-8 h-8 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+            </svg>
+          </div>
+          <h2 className="text-2xl font-bold text-gray-800 mb-4">Password Reset Successful</h2>
+          <p className="text-gray-600 mb-6">
+            Your admin password has been reset successfully. You can now log in with your new password.
+          </p>
+          <button
+            onClick={() => navigate('/admin-portal-xyz123')}
+            className="w-full bg-green-600 text-white py-3 px-4 rounded-lg hover:bg-green-700 transition-colors"
+          >
+            Go to Login
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-gray-900 to-gray-700 flex items-center justify-center p-4">
+      <div className="max-w-md w-full bg-white rounded-lg shadow-xl p-8">
+        <div className="text-center mb-8">
+          <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
+            <svg className="w-8 h-8 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 7a2 2 0 012 2m0 0a2 2 0 012 2v6a2 2 0 01-2 2H7a2 2 0 01-2-2V9a2 2 0 012-2m0 0V7a2 2 0 012-2m4 0V5a2 2 0 00-2-2H9a2 2 0 00-2 2v2m8 0V9a2 2 0 00-2-2H9a2 2 0 00-2 2v8a2 2 0 002 2h6a2 2 0 002-2V9z" />
+            </svg>
+          </div>
+          <h1 className="text-2xl font-bold text-gray-800 mb-2">Set New Password</h1>
+          <p className="text-gray-600">Enter your new admin password</p>
+        </div>
+
+        {error && (
+          <div className="mb-6 p-4 bg-red-50 border border-red-200 text-red-700 rounded-lg text-sm">
+            {error}
+          </div>
+        )}
+
+        <form onSubmit={handleResetPassword} className="space-y-6">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              New Password
+            </label>
+            <input
+              type="password"
+              value={passwords.new_password}
+              onChange={(e) => setPasswords({...passwords, new_password: e.target.value})}
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500"
+              required
+              disabled={loading}
+              placeholder="Enter new password"
+              minLength={8}
+            />
+            <p className="text-xs text-gray-500 mt-1">Must be at least 8 characters</p>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Confirm New Password
+            </label>
+            <input
+              type="password"
+              value={passwords.confirm_password}
+              onChange={(e) => setPasswords({...passwords, confirm_password: e.target.value})}
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500"
+              required
+              disabled={loading}
+              placeholder="Confirm new password"
+            />
+          </div>
+
+          <button
+            type="submit"
+            disabled={loading || !token}
+            className="w-full bg-green-600 text-white py-3 px-4 rounded-lg hover:bg-green-700 transition-colors disabled:opacity-50 font-medium"
+          >
+            {loading ? (
+              <span className="flex items-center justify-center">
+                <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2"></div>
+                Resetting Password...
+              </span>
+            ) : (
+              'Reset Password'
+            )}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+};
+
+
 
 // Protected Route Component
 const ProtectedRoute = ({ children, adminOnly = false }) => {
@@ -1680,10 +2360,10 @@ const UserDashboard = () => {
     try {
       const result = await apiService.createItem(formData, token);
       setShowModal(false);
-      showSuccess('✅ Item submitted for approval!'); // ✅ ADD THIS
+      showSuccess('Item submitted for approval!'); 
       await loadData();
     } catch (error) {
-      showError('❌ Failed to add item: ' + error.message); // ✅ ADD THIS
+      showError('❌ Failed to add item: ' + error.message);
     }
   };
   
@@ -2160,7 +2840,8 @@ const AdminDashboard = () => {
   const [savingTerms, setSavingTerms] = useState(false);
   const [approvedItems, setApprovedItems] = useState([]);
   const [rejectedItems, setRejectedItems] = useState([]);
-  const { showSuccess, showError, showConfirm, showPrompt } = useNotification(); // ✅ ADD THIS
+  const { showSuccess, showError, showConfirm, showPrompt } = useNotification(); 
+  const [showProfileModal, setShowProfileModal] = useState(false); 
 
   // FIXED: Enhanced loadData with better error handling
   const loadData = React.useCallback(async () => {
@@ -2377,6 +3058,17 @@ const handleDeleteUser = async (googleId, userName) => {
                 <User className="w-6 h-6 text-gray-600 mr-2" />
                 <span className="text-gray-700">{user?.name || 'Admin'}</span>
               </div>
+              <button
+                onClick={() => setShowProfileModal(true)}
+                className="flex items-center px-3 py-2 text-gray-700 hover:text-gray-900 transition-colors"
+                title="Profile Settings"
+              >
+                <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                </svg>
+                Settings
+              </button>
               <button
                 onClick={handleLogout}
                 className="flex items-center px-3 py-2 text-gray-700 hover:text-gray-900"
@@ -2821,6 +3513,14 @@ const handleDeleteUser = async (googleId, userName) => {
           </div>
         </div>
       )}
+
+        {showProfileModal && (
+                <AdminProfile 
+                  onClose={() => setShowProfileModal(false)} 
+                />
+              )}
+
+      
     </div>
   );
 };
@@ -2841,6 +3541,10 @@ const App = () => {
         <Route path="/admin-portal-xyz123" element={
           user && isAdmin ? <Navigate to="/admin-portal" replace /> : <AdminLogin />
         } />
+
+        {/* ✅ ADD THESE TWO NEW ROUTES */}
+        <Route path="/admin-forgot-password" element={<AdminForgotPassword />} />
+        <Route path="/admin-reset-password" element={<AdminResetPassword />} />
 
         {/* Protected User Routes */}
         <Route path="/dashboard" element={
@@ -2867,8 +3571,8 @@ const App = () => {
       </Routes>
     </Router>
   );
-
 };
+
 
 const EcoPantryApp = () => {
   return (

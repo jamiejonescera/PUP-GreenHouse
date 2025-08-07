@@ -10,11 +10,17 @@ from datetime import datetime, timedelta
 import base64
 from botocore.exceptions import ClientError
 import hashlib
-import os
+from dotenv import load_dotenv
 from mangum import Mangum
 import jwt
 from botocore.config import Config
 import google.generativeai as genai
+import os
+import admin_auth
+
+# Load environment variables
+load_dotenv()
+
 
 # Initialize FastAPI app
 app = FastAPI(title="Eco Pantry API", version="1.0.0")
@@ -40,24 +46,6 @@ config = Config(
     retries={'max_attempts': 3},
     region_name=AWS_REGION
 )
-
-# Initialize AWS clients with config
-try:
-    dynamodb = boto3.resource('dynamodb', region_name=AWS_REGION, config=config)
-    s3_client = boto3.client('s3', region_name=AWS_REGION, config=config)
-    table = dynamodb.Table(DYNAMODB_TABLE)
-    print("✅ AWS clients initialized successfully")
-except Exception as e:
-    print(f"❌ Error initializing AWS clients: {e}")
-
-try:
-    GEMINI_API_KEY = "AIzaSyB8y7CIffxUNI8CMnlrtcntpp7tJ7JeFYk"
-    genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel('gemini-1.5-flash')
-    print("✅ Gemini AI initialized successfully")
-except Exception as e:
-    print(f"❌ Error initializing Gemini AI: {e}")
-    model = None
 
 # Security
 security = HTTPBearer()
@@ -138,6 +126,50 @@ class LocationCreate(BaseModel):
     name: str
     description: str
     is_active: bool = True
+
+
+class AdminSetup(BaseModel):
+    name: str
+    email: EmailStr
+    password: str
+
+class AdminLogin(BaseModel):
+    email: EmailStr
+    password: str
+
+class AdminProfileUpdate(BaseModel):
+    current_email: EmailStr
+    new_name: Optional[str] = None
+    new_email: Optional[EmailStr] = None
+    new_password: Optional[str] = None
+
+class ForgotPassword(BaseModel):
+    email: EmailStr
+
+class ResetPassword(BaseModel):
+    token: str
+    new_password: str
+
+# Initialize AWS clients with config
+try:
+    dynamodb = boto3.resource('dynamodb', region_name=AWS_REGION, config=config)
+    s3_client = boto3.client('s3', region_name=AWS_REGION, config=config)
+    table = dynamodb.Table(DYNAMODB_TABLE)
+    print("✅ AWS clients initialized successfully")
+    
+    # ✅ ADD THIS - Initialize admin manager AFTER table is created
+    try:
+        from admin_auth import AdminAuthManager
+        admin_manager = AdminAuthManager(table)
+        print("✅ Admin manager initialized successfully")
+    except ImportError:
+        print("⚠️ admin_auth.py not found - admin features will not work")
+        admin_manager = None
+    
+except Exception as e:
+    print(f"❌ Error initializing AWS clients: {e}")
+    admin_manager = None
+
 
 # Helper Functions
 def generate_token(user_id: str, is_admin: bool = False) -> str:
@@ -269,34 +301,257 @@ async def login(user_data: UserCreate):
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/auth/admin/login")
-async def admin_login(username: str = Form(), password: str = Form()):
-    """Admin login with username/password"""
+
+
+
+
+@app.get("/admin/setup/check")
+async def check_admin_setup():
+    """Check if admin setup is needed"""
     try:
-        print(f"🔍 Admin login attempt: {username}")
-        
-        if username != "admin" or password != "1admin@123!":
-            print("❌ Invalid admin credentials")
-            raise HTTPException(status_code=401, detail="Invalid credentials")
-        
-        # Create admin token
-        admin_id = "admin-user-001"
-        token = generate_token(admin_id, is_admin=True)
-        
-        print("✅ Admin login successful")
+        is_first_time = admin_manager.check_first_time_setup()
         return {
-            "access_token": token,  # Frontend expects this field name
-            "user": {
-                "user_id": admin_id,
-                "name": "Administrator",
-                "email": "admin@ecopantry.com",
-                "is_admin": True
-            }
+            "first_time_setup": is_first_time,
+            "message": "Admin setup required" if is_first_time else "Admin already exists"
         }
+    except Exception as e:
+        print(f"Error checking admin setup: {e}")
+        return {"first_time_setup": True, "error": str(e)}
+
+@app.post("/admin/setup")
+async def setup_admin(admin_data: AdminSetup):
+    """Create the first admin account"""
+    try:
+        print(f"🔧 Setting up admin account: {admin_data.email}")
+        
+        # Validate password strength
+        if len(admin_data.password) < 8:
+            return {"success": False, "error": "Password must be at least 8 characters"}
+        
+        if not any(c.isupper() for c in admin_data.password):
+            return {"success": False, "error": "Password must contain at least one uppercase letter"}
+        
+        if not any(c.islower() for c in admin_data.password):
+            return {"success": False, "error": "Password must contain at least one lowercase letter"}
+        
+        if not any(c.isdigit() for c in admin_data.password):
+            return {"success": False, "error": "Password must contain at least one number"}
+        
+        # Create admin
+        result = admin_manager.create_admin(
+            name=admin_data.name,
+            email=admin_data.email,
+            password=admin_data.password
+        )
+        
+        if result["success"]:
+            print(f"✅ Admin created: {admin_data.name}")
+            return result
+        else:
+            print(f"❌ Admin creation failed: {result['error']}")
+            return result
+            
+    except Exception as e:
+        print(f"❌ Error in admin setup: {e}")
+        return {"success": False, "error": str(e)}
+
+@app.post("/admin/login")
+async def admin_login_new(login_data: AdminLogin):
+    """New admin login with email/password"""
+    try:
+        print(f"🔐 Admin login attempt: {login_data.email}")
+        
+        # Authenticate admin
+        result = admin_manager.authenticate_admin(login_data.email, login_data.password)
+        
+        if result["success"]:
+            # Generate JWT token
+            admin_data = result["admin"]
+            token = generate_token(admin_data["user_id"], is_admin=True)
+            
+            print(f"✅ Admin login successful: {admin_data['name']}")
+            return {
+                "access_token": token,
+                "user": admin_data
+            }
+        else:
+            print(f"❌ Admin login failed: {result['error']}")
+            raise HTTPException(status_code=401, detail=result["error"])
+            
     except HTTPException:
         raise
     except Exception as e:
-        print(f"❌ Admin login error: {e}")
+        print(f"❌ Error in admin login: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/admin/profile")
+async def get_admin_profile(token_data: dict = Depends(admin_required)):
+    """Get current admin profile"""
+    try:
+        response = table.get_item(
+            Key={"user_id": "ADMIN", "item_id": "PROFILE"}
+        )
+        
+        if "Item" not in response:
+            raise HTTPException(status_code=404, detail="Admin profile not found")
+        
+        admin = response["Item"]
+        return {
+            "name": admin.get("name"),
+            "email": admin.get("email"),
+            "created_at": admin.get("created_at"),
+            "last_login": admin.get("last_login")
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.put("/admin/profile")
+async def update_admin_profile(
+    profile_data: AdminProfileUpdate,
+    token_data: dict = Depends(admin_required)
+):
+    """Update admin profile"""
+    try:
+        print(f"📝 Admin updating profile: {profile_data.current_email}")
+        
+        # Validate new password if provided
+        if profile_data.new_password:
+            if len(profile_data.new_password) < 8:
+                return {"success": False, "error": "Password must be at least 8 characters"}
+        
+        # Update profile
+        result = admin_manager.update_admin_profile(
+            current_email=profile_data.current_email,
+            new_name=profile_data.new_name,
+            new_email=profile_data.new_email,
+            new_password=profile_data.new_password
+        )
+        
+        if result["success"]:
+            print(f"✅ Admin profile updated successfully")
+            return result
+        else:
+            print(f"❌ Profile update failed: {result['error']}")
+            return result
+            
+    except Exception as e:
+        print(f"❌ Error updating admin profile: {e}")
+        return {"success": False, "error": str(e)}
+
+@app.post("/admin/forgot-password")
+async def admin_forgot_password(forgot_data: ForgotPassword):
+    """Send password reset email to admin"""
+    try:
+        print(f"📧 Password reset requested for: {forgot_data.email}")
+        
+        # Generate reset token
+        result = admin_manager.generate_reset_token(forgot_data.email)
+        
+        if not result["success"]:
+            # Don't reveal if email exists or not for security
+            return {"success": True, "message": "If the email exists, a reset link has been sent"}
+        
+        # Send reset email
+        email_sent = admin_manager.send_reset_email(
+            email=forgot_data.email,
+            reset_token=result["reset_token"],
+            admin_name=result["admin_name"]
+        )
+        
+        if email_sent:
+            print(f"✅ Reset email sent to: {forgot_data.email}")
+            return {"success": True, "message": "Password reset email sent successfully"}
+        else:
+            print(f"❌ Failed to send reset email to: {forgot_data.email}")
+            # Still return success for security (don't reveal email issues)
+            return {"success": True, "message": "If the email exists, a reset link has been sent"}
+            
+    except Exception as e:
+        print(f"❌ Error in forgot password: {e}")
+        # Return generic success message for security
+        return {"success": True, "message": "If the email exists, a reset link has been sent"}
+
+@app.post("/admin/reset-password")
+async def admin_reset_password(reset_data: ResetPassword):
+    """Reset admin password with token"""
+    try:
+        print(f"🔑 Password reset attempt with token")
+        
+        # Validate new password
+        if len(reset_data.new_password) < 8:
+            return {"success": False, "error": "Password must be at least 8 characters"}
+        
+        # Reset password
+        result = admin_manager.reset_password(reset_data.token, reset_data.new_password)
+        
+        if result["success"]:
+            print(f"✅ Password reset successful")
+            return result
+        else:
+            print(f"❌ Password reset failed: {result['error']}")
+            return result
+            
+    except Exception as e:
+        print(f"❌ Error resetting password: {e}")
+        return {"success": False, "error": str(e)}
+
+@app.post("/auth/admin/login")
+async def admin_login_legacy(username: str = Form(), password: str = Form()):
+    """Legacy admin login - redirects to new system"""
+    try:
+        print(f"🔄 Legacy admin login attempt: {username}")
+        
+        # Check if this is the old hardcoded admin
+        if username == "admin" and password == "1admin@123!":
+            # Check if new admin system is set up
+            is_first_time = admin_manager.check_first_time_setup()
+            
+            if is_first_time:
+                # Allow legacy login but indicate setup needed
+                admin_id = "admin-user-001"
+                token = generate_token(admin_id, is_admin=True)
+                
+                return {
+                    "access_token": token,
+                    "user": {
+                        "user_id": admin_id,
+                        "name": "Administrator",
+                        "email": "admin@ecopantry.com",
+                        "is_admin": True,
+                        "setup_required": True  # Flag for frontend
+                    }
+                }
+            else:
+                # New system is set up, redirect to new login
+                raise HTTPException(
+                    status_code=410,
+                    detail="Please use the new admin login system"
+                )
+        
+        # Try new login system
+        try:
+            result = admin_manager.authenticate_admin(username, password)
+            if result["success"]:
+                admin_data = result["admin"]
+                token = generate_token(admin_data["user_id"], is_admin=True)
+                
+                return {
+                    "access_token": token,
+                    "user": admin_data
+                }
+        except:
+            pass
+        
+        # Invalid credentials
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ Legacy admin login error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # User Management Endpoints
@@ -394,6 +649,8 @@ async def get_users(token_data: dict = Depends(admin_required)):
     except Exception as e:
         print(f"❌ Error getting users: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+    
+    
 @app.put("/users/{google_id}/status")
 async def update_user_status(
     google_id: str, 
@@ -1792,6 +2049,8 @@ async def debug_items():
     except Exception as e:
         return {"error": str(e)}
 
+
+
 @app.delete("/admin/users/{google_id}")
 async def delete_user_permanently(
     google_id: str,
@@ -1879,9 +2138,13 @@ async def debug_table():
 async def health_check():
     return {"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
 
-# Lambda handler
+
+
+# Lambda handler (for production deployment)
 handler = Mangum(app)
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    print("🚀 Starting local development server...")
+    print("📍 Your app will run at: http://localhost:8000")
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True) 
