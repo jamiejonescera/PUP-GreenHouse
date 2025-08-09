@@ -276,9 +276,12 @@ class AdminAuthManager:
                 print("SMTP credentials not configured")
                 return False
             
-            # Create reset link (you'll need to update this with your actual domain)
-            reset_link = f"http://localhost:3000/admin-reset-password?token={reset_token}"
+            # # Create reset link (you'll need to update this with your actual domain)
+            # reset_link = f"http://localhost:3000/admin-reset-password?token={reset_token}"
             
+            # Change to your actual frontend domain:
+            reset_link = f"https://your-s3-bucket-name.s3.amazonaws.com/admin-reset-password?token={reset_token}"
+
             # Create email
             msg = MimeMultipart()
             msg['From'] = SMTP_USERNAME

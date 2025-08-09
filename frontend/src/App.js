@@ -349,9 +349,8 @@ const AuthProvider = ({ children }) => {
 
 const useAuth = () => useContext(AuthContext);
 // API Service
-// const API_BASE = 'https://grcal5qmrihig54qfyc37tzyxe0knzdz.lambda-url.ap-northeast-1.on.aws';
-const API_BASE = 'http://localhost:8000';  // For local testing
-
+const API_BASE = 'https://grcal5qmrihig54qfyc37tzyxe0knzdz.lambda-url.ap-northeast-1.on.aws';
+// const API_BASE = 'http://localhost:8000';
 const apiService = {
   // Auth endpoints
   googleLogin: async (userData) => {
@@ -2656,12 +2655,14 @@ const handleGetAIRecommendations = async () => {
           </div>
 
           {/* Search and Filters */}
-          <div className="flex flex-col sm:flex-row gap-4">
-            <div className="flex-1 relative">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
-              <input
-                type="text"
-                placeholder="Search items..."
+          {activeTab !== 'ai-recommendations' && ( // ✅ START HERE
+            <div className="flex flex-col sm:flex-row gap-4">
+              {/* All your existing search/filter content stays the same */}
+              <div className="flex-1 relative">
+                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
+                <input
+                  type="text"
+                  placeholder="Search items..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-green-500"
@@ -2693,8 +2694,9 @@ const handleGetAIRecommendations = async () => {
             >
               <Plus className="w-4 h-4 mr-1" />
               Add Item
-            </button>
-          </div>
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Items Grid */}
