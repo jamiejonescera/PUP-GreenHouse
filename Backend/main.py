@@ -24,11 +24,14 @@ load_dotenv()
 
 # Initialize FastAPI app
 app = FastAPI(title="Eco Pantry API", version="1.0.0")
-
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "https://yourdomain.com"],
+    allow_origins=[
+        "http://localhost:3000", 
+        "https://yourdomain.com",
+        "https://thegreenhouse-project.netlify.app"  # ADD THIS LINE
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
