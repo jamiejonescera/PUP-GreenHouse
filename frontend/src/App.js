@@ -348,9 +348,15 @@ const AuthProvider = ({ children }) => {
 
 
 const useAuth = () => useContext(AuthContext);
-// API Service
-const API_BASE = 'https://grcal5qmrihig54qfyc37tzyxe0knzdz.lambda-url.ap-northeast-1.on.aws';
-// const API_BASE = 'http://localhost:8000';
+
+const API_BASE = process.env.REACT_APP_API_URL || (
+  process.env.NODE_ENV === 'development' 
+    ? 'http://localhost:8000'
+    : 'https://grcal5qmrihig54qfyc37tzyxe0knzdz.lambda-url.ap-northeast-1.on.aws'
+);
+
+console.log('🔍 Current API_BASE:', API_BASE); // Debug line
+console.log('🌍 Environment:', process.env.NODE_ENV); // Debug line
 const apiService = {
   // Auth endpoints
   googleLogin: async (userData) => {
@@ -854,10 +860,10 @@ const AdminLogin = () => {
           <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
             <Shield className="w-8 h-8 text-red-600" />
           </div>
-          <h1 className="text-2xl font-bold text-gray-800 mb-2">Admin Portal</h1>
-          <p className="text-gray-600">Project GreenHouse Administration</p>
+          <h1 className="text-2xl font-bold text-gray-800 mb-2">Project GreenHouse</h1>
+          <p className="text-gray-600">Admin Portal</p>
           <div className="mt-2 px-3 py-1 bg-red-100 text-red-800 text-xs font-medium rounded-full inline-block">
-            SECURE ACCESS
+            Polytechnic University of the Philippines
           </div>
         </div>
 
@@ -1344,7 +1350,7 @@ const AdminForgotPassword = () => {
           </div>
           <h2 className="text-2xl font-bold text-gray-800 mb-4">Check Your Email</h2>
           <p className="text-gray-600 mb-6">
-            If an admin account exists with that email, we've sent you a password reset link.
+            Password reset link has been sent to the admin's email account.
           </p>
           <button
             onClick={() => navigate('/admin-portal-xyz123')}

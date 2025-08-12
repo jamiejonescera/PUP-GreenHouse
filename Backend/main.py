@@ -28,9 +28,8 @@ app = FastAPI(title="Eco Pantry API", version="1.0.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:3000", 
-        "https://yourdomain.com",
-        "https://thegreenhouse-project.netlify.app"  # ADD THIS LINE
+        "http://localhost:3000",
+        "https://thegreenhouse-project.netlify.app"
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -445,37 +444,52 @@ async def update_admin_profile(
         return {"success": False, "error": str(e)}
 
 @app.post("/admin/forgot-password")
-async def admin_forgot_password(forgot_data: ForgotPassword):
-    """Send password reset email to admin"""
+async def admin_forgot_password(request: dict):
+    """Secure admin password reset request"""
     try:
-        print(f"📧 Password reset requested for: {forgot_data.email}")
+        email = request.get("email", "").strip().lower()
         
-        # Generate reset token
-        result = admin_manager.generate_reset_token(forgot_data.email)
+        if not email:
+            return {"success": False, "error": "Email is required"}
+        
+        print(f"📧 Password reset requested for: {email}")
+        
+        # Generate reset token (includes security check)
+        result = admin_manager.generate_reset_token(email)
         
         if not result["success"]:
-            # Don't reveal if email exists or not for security
-            return {"success": True, "message": "If the email exists, a reset link has been sent"}
+            print(f"❌ Reset token generation failed: {result['error']}")
+            # IMPORTANT: Return the actual error to frontend for blocked emails
+            return {
+                "success": False, 
+                "error": result["error"]  # This will show the security block message
+            }
         
-        # Send reset email
-        email_sent = admin_manager.send_reset_email(
-            email=forgot_data.email,
-            reset_token=result["reset_token"],
-            admin_name=result["admin_name"]
-        )
+        # Send email only if token generation succeeded
+        reset_token = result["reset_token"]
+        admin_name = result["admin_name"]
+        
+        email_sent = admin_manager.send_reset_email(email, reset_token, admin_name)
         
         if email_sent:
-            print(f"✅ Reset email sent to: {forgot_data.email}")
-            return {"success": True, "message": "Password reset email sent successfully"}
+            print(f"✅ Reset email sent to: {email}")
+            return {
+                "success": True,
+                "message": "Password reset email sent successfully"
+            }
         else:
-            print(f"❌ Failed to send reset email to: {forgot_data.email}")
-            # Still return success for security (don't reveal email issues)
-            return {"success": True, "message": "If the email exists, a reset link has been sent"}
+            print(f"❌ Failed to send reset email to: {email}")
+            return {
+                "success": False,
+                "error": "Failed to send email. Please try again later."
+            }
             
     except Exception as e:
         print(f"❌ Error in forgot password: {e}")
-        # Return generic success message for security
-        return {"success": True, "message": "If the email exists, a reset link has been sent"}
+        return {
+            "success": False,
+            "error": "An error occurred. Please try again."
+        }
 
 @app.post("/admin/reset-password")
 async def admin_reset_password(reset_data: ResetPassword):

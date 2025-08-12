@@ -10,10 +10,10 @@ from botocore.exceptions import ClientError
 import os
 from dotenv import load_dotenv
 
-
 load_dotenv()
+print(f"🔍 DEBUG - SMTP_PASSWORD from env: {os.getenv('SMTP_PASSWORD')}")
 
-# Email configuration (you can use Gmail SMTP for testing)
+# Email configuration
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 587
 SMTP_USERNAME = os.getenv("SMTP_USERNAME")
@@ -184,21 +184,27 @@ class AdminAuthManager:
             return {"success": False, "error": str(e)}
     
     def generate_reset_token(self, email: str) -> Dict[str, Any]:
-        """Generate password reset token"""
+        """Generate password reset token - SECURE VERSION"""
         try:
-            # Get admin record
+            # Get admin record first
             response = self.table.get_item(
                 Key={"user_id": "ADMIN", "item_id": "PROFILE"}
             )
             
             if "Item" not in response:
+                print(f"❌ Admin account not found in database")
                 return {"success": False, "error": "Admin not found"}
             
             admin = response["Item"]
+            admin_email = admin.get("email")
             
-            # Check if email matches
-            if admin.get("email") != email:
-                return {"success": False, "error": "Email not found"}
+            # SECURITY CHECK: Only allow reset for the actual admin email
+            if admin_email != email:
+                print(f"🚨 Security blocked: Attempted reset for '{email}' but admin email is '{admin_email}'")
+                # Return generic error message to prevent email enumeration
+                return {"success": False, "error": "Email must match admin email for reset"}
+            
+            print(f"✅ Email verification passed: {email} matches admin email")
             
             # Generate reset token
             reset_token = secrets.token_urlsafe(32)
@@ -222,7 +228,7 @@ class AdminAuthManager:
             
         except Exception as e:
             print(f"Error generating reset token: {e}")
-            return {"success": False, "error": str(e)}
+            return {"success": False, "error": "An error occurred. Please try again."}
     
     def reset_password(self, token: str, new_password: str) -> Dict[str, Any]:
         """Reset password with token"""
@@ -270,49 +276,78 @@ class AdminAuthManager:
             return {"success": False, "error": str(e)}
     
     def send_reset_email(self, email: str, reset_token: str, admin_name: str) -> bool:
-        """Send password reset email"""
+        """Send password reset email with environment-aware reset link"""
         try:
             if not SMTP_USERNAME or not SMTP_PASSWORD:
-                print("SMTP credentials not configured")
+                print("❌ SMTP credentials not configured")
                 return False
             
-            # # Create reset link (you'll need to update this with your actual domain)
-            # reset_link = f"http://localhost:3000/admin-reset-password?token={reset_token}"
+            print(f"📧 Attempting to send email to: {email}")
+            print(f"🔐 Using SMTP username: {SMTP_USERNAME}")
+            print(f"🔑 Password length: {len(SMTP_PASSWORD)} chars")
             
-            # Change to your actual frontend domain:
-            reset_link = f"https://your-s3-bucket-name.s3.amazonaws.com/admin-reset-password?token={reset_token}"
-
-            # Create email
-            msg = MimeMultipart()
+            # Smart environment detection for reset link
+            environment = os.getenv("ENVIRONMENT", "production")
+            
+            if environment.lower() in ["local", "development", "dev"]:
+                # Local development - FIXED: Use correct path
+                frontend_url = "http://localhost:3000"
+                reset_path = "/admin-reset-password"  # ✅ FIXED PATH
+            else:
+                # Production deployment
+                frontend_url = os.getenv("FRONTEND_URL", "https://thegreenhouse-project.netlify.app")
+                reset_path = "/admin-reset-password"
+            
+            reset_link = f"{frontend_url}{reset_path}?token={reset_token}"
+            
+            print(f"🌍 Environment: {environment}")
+            print(f"🔗 Reset link: {reset_link}")
+            
+            # Create email message
+            msg = MIMEMultipart()
             msg['From'] = SMTP_USERNAME
             msg['To'] = email
-            msg['Subject'] = "Project GreenHouse - Admin Password Reset"
+            msg['Subject'] = "Eco Pantry - Admin Password Reset"
             
             body = f"""
-            Hello {admin_name},
-            
-            You requested a password reset for your Project GreenHouse admin account.
-            
-            Click the link below to reset your password (valid for 1 hour):
-            {reset_link}
-            
-            If you didn't request this reset, please ignore this email.
-            
-            Best regards,
-            Project GreenHouse Team
+Hello {admin_name},
+
+You requested a password reset for your PUP-GreenHouse admin account.
+
+Click the link below to reset your password (valid for 1 hour):
+{reset_link}
+
+If you didn't request this reset, please ignore this email.
+
+Best regards,
+GreenHouse Project - PUP Sustainability Platform
+
+---
+
+Reset expires: {(datetime.utcnow() + timedelta(hours=1)).strftime('%Y-%m-%d %I:%M:%S %p UTC')}
             """
             
-            msg.attach(MimeText(body, 'plain'))
+            msg.attach(MIMEText(body, 'plain'))
             
-            # Send email
+            # Connect to Gmail SMTP
+            print("🔗 Connecting to Gmail...")
             server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
             server.starttls()
+            
+            print("🔑 Authenticating...")
             server.login(SMTP_USERNAME, SMTP_PASSWORD)
+            
+            print("📤 Sending email...")
             server.send_message(msg)
             server.quit()
             
+            print(f"✅ Password reset email sent successfully to: {email}")
             return True
             
+        except smtplib.SMTPAuthenticationError as e:
+            print(f"❌ SMTP Authentication failed: {e}")
+            return False
+            
         except Exception as e:
-            print(f"Error sending reset email: {e}")
+            print(f"❌ Error sending email: {e}")
             return False
