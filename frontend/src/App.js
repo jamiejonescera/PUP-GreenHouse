@@ -1,5 +1,5 @@
 import React, { useState, useEffect, createContext, useContext } from 'react';
-import { Plus, Search, User, LogOut, MapPin, Clock, MessageSquare, Check, X, Edit, Trash2, Shield } from 'lucide-react';
+import { Plus, Search, User, LogOut, MapPin, Clock, MessageSquare, Check, X, Edit, Trash2, Shield, Menu, Users, Settings } from 'lucide-react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate } from 'react-router-dom';
 
 // Auth Context
