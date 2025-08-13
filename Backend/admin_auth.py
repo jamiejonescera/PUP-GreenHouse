@@ -145,30 +145,40 @@ class AdminAuthManager:
             if admin.get("email") != current_email:
                 return {"success": False, "error": "Current email doesn't match"}
             
-            # Prepare update
+            # Prepare update - FIXED VERSION
             update_expression = "SET updated_at = :timestamp"
             expression_values = {":timestamp": datetime.utcnow().isoformat()}
+            expression_names = {}  # Add this for reserved words
             
-            if new_name:
+            if new_name and new_name.strip():
                 update_expression += ", #name = :name"
-                expression_values[":name"] = new_name
+                expression_values[":name"] = new_name.strip()
+                expression_names["#name"] = "name"  # 'name' is reserved in DynamoDB
             
-            if new_email:
+            if new_email and new_email.strip():
                 update_expression += ", email = :email"
-                expression_values[":email"] = new_email
+                expression_values[":email"] = new_email.strip()
             
-            if new_password:
+            if new_password and new_password.strip():
                 password_hash = self.hash_password(new_password)
                 update_expression += ", password_hash = :password_hash"
                 expression_values[":password_hash"] = password_hash
             
-            # Update admin record
-            self.table.update_item(
-                Key={"user_id": "ADMIN", "item_id": "PROFILE"},
-                UpdateExpression=update_expression,
-                ExpressionAttributeValues=expression_values,
-                ExpressionAttributeNames={"#name": "name"} if new_name else None
-            )
+            print(f"🔄 Updating admin profile: {update_expression}")
+            print(f"📝 Values: {expression_values}")
+            
+            # Update admin record - FIXED
+            update_params = {
+                "Key": {"user_id": "ADMIN", "item_id": "PROFILE"},
+                "UpdateExpression": update_expression,
+                "ExpressionAttributeValues": expression_values
+            }
+            
+            # Only add ExpressionAttributeNames if we have reserved words
+            if expression_names:
+                update_params["ExpressionAttributeNames"] = expression_names
+            
+            self.table.update_item(**update_params)
             
             return {
                 "success": True,
@@ -180,7 +190,9 @@ class AdminAuthManager:
             }
             
         except Exception as e:
-            print(f"Error updating admin profile: {e}")
+            print(f"❌ Error updating admin profile: {e}")
+            import traceback
+            traceback.print_exc()
             return {"success": False, "error": str(e)}
     
     def generate_reset_token(self, email: str) -> Dict[str, Any]:

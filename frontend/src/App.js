@@ -264,6 +264,7 @@ const AuthProvider = ({ children }) => {
     <>
       <AuthContext.Provider value={{ 
         user, 
+        setUser, 
         token, 
         isAdmin, 
         login, 
@@ -1116,9 +1117,13 @@ const AdminSetup = ({ onSetupComplete }) => {
 };
 
 // 3. ADD this AdminProfile component (to be used in AdminDashboard):
-
 const AdminProfile = ({ onClose }) => {
-  const { user, token } = useAuth();
+  const { user, token, setUser } = useAuth();
+  const [showConfirmModal, setShowConfirmModal] = useState(false);
+  const [showPasswordModal, setShowPasswordModal] = useState(false);
+  const [passwordInput, setPasswordInput] = useState('');
+  const [passwordResolve, setPasswordResolve] = useState(null);
+  const [confirmModalData, setConfirmModalData] = useState({});
   const [profileData, setProfileData] = useState({
     current_email: user?.email || '',
     new_name: user?.name || '',
@@ -1138,6 +1143,50 @@ const AdminProfile = ({ onClose }) => {
     if (profileData.new_password && profileData.new_password !== profileData.confirm_password) {
       setError('Passwords do not match');
       return;
+    }
+
+    // Check if sensitive changes require current password
+    const isEmailChange = profileData.new_email && profileData.new_email !== user?.email;
+    const isPasswordChange = profileData.new_password;
+    
+    if (isEmailChange || isPasswordChange) {
+        // Show custom password confirmation modal
+        const currentPassword = await showPasswordConfirmModal();
+        if (!currentPassword) {
+            return; // User cancelled
+        }
+        
+        // Verify current password with backend first
+        try {
+            const verifyResponse = await fetch(`${API_BASE}/admin/verify-password`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({ 
+                    email: user?.email, 
+                    password: currentPassword 
+                })
+            });
+            
+            const verifyResult = await verifyResponse.json();
+            if (!verifyResult.success) {
+                setError('Current password is incorrect');
+                return;
+            }
+        } catch (error) {
+            setError('Failed to verify current password');
+            return;
+        }
+        
+        // Email change confirmation
+        if (isEmailChange) {
+            const emailConfirmed = await showEmailConfirmModal(profileData.new_email);
+            if (!emailConfirmed) {
+                return; // User cancelled
+            }
+        }
     }
 
     setLoading(true);
@@ -1168,11 +1217,23 @@ const AdminProfile = ({ onClose }) => {
 
       if (result.success) {
         setSuccess('Profile updated successfully!');
+        
+        // ✅ UPDATE USER CONTEXT IMMEDIATELY
+        const updatedUser = {
+          ...user,
+          name: profileData.new_name || user.name,
+          email: profileData.new_email || user.email
+        };
+        setUser(updatedUser);
+        
+        // Also update localStorage to persist the changes
+        localStorage.setItem('user', JSON.stringify(updatedUser));
+        
         setTimeout(() => {
           onClose();
-          // You might want to refresh the page or update the user context here
         }, 2000);
-      } else {
+      }
+      else {
         setError(result.error || 'Update failed');
       }
     } catch (error) {
@@ -1183,124 +1244,240 @@ const AdminProfile = ({ onClose }) => {
     }
   };
 
+  // Helper functions for custom modals:
+  const showPasswordConfirmModal = () => {
+      return new Promise((resolve) => {
+          setPasswordInput(''); // Clear previous input
+          setPasswordResolve(() => resolve); // Store the resolve function
+          setShowPasswordModal(true); // Show the modal
+      });
+  };
+
+  // Add these helper functions:
+  const handlePasswordConfirm = () => {
+      if (passwordInput.trim()) {
+          setShowPasswordModal(false);
+          if (passwordResolve) passwordResolve(passwordInput);
+          setPasswordInput('');
+      }
+  };
+
+  const handlePasswordCancel = () => {
+      setShowPasswordModal(false);
+      if (passwordResolve) passwordResolve(null);
+      setPasswordInput('');
+  };
+
+  const showEmailConfirmModal = (newEmail) => {
+    return new Promise((resolve) => {
+        setConfirmModalData({
+            title: "⚠️ Change Email Address",
+            message: `You are about to change your email to "${newEmail}"\n\nThis will affect your admin login. You'll need to use the new email to log in.`,
+            confirmText: "Yes, Change Email",
+            cancelText: "Cancel",
+            onConfirm: () => {
+                setShowConfirmModal(false);
+                resolve(true);
+            },
+            onCancel: () => {
+                setShowConfirmModal(false);
+                resolve(false);
+            }
+        });
+        setShowConfirmModal(true);
+    });
+  };
+
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-lg shadow-xl max-w-md w-full max-h-[90vh] overflow-y-auto">
-        <div className="p-6">
-          <div className="flex justify-between items-center mb-6">
-            <h2 className="text-xl font-bold text-gray-800">Admin Profile Settings</h2>
-            <button
-              onClick={onClose}
-              className="text-gray-400 hover:text-gray-600 transition-colors"
-            >
-              <X className="w-6 h-6" />
-            </button>
-          </div>
-
-          {error && (
-            <div className="mb-4 p-3 bg-red-100 border border-red-400 text-red-700 rounded text-sm">
-              {error}
-            </div>
-          )}
-
-          {success && (
-            <div className="mb-4 p-3 bg-green-100 border border-green-400 text-green-700 rounded text-sm">
-              {success}
-            </div>
-          )}
-
-          <form onSubmit={handleUpdateProfile} className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Name
-              </label>
-              <input
-                type="text"
-                value={profileData.new_name}
-                onChange={(e) => setProfileData({...profileData, new_name: e.target.value})}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-blue-500"
-                required
-                disabled={loading}
-              />
+    <>
+      <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+        <div className="bg-white rounded-lg shadow-xl max-w-md w-full max-h-[90vh] overflow-y-auto">
+          <div className="p-6">
+            <div className="flex justify-between items-center mb-6">
+              <h2 className="text-xl font-bold text-gray-800">Admin Profile Settings</h2>
+              <button
+                onClick={onClose}
+                className="text-gray-400 hover:text-gray-600 transition-colors"
+              >
+                <X className="w-6 h-6" />
+              </button>
             </div>
 
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Email Address
-              </label>
-              <input
-                type="email"
-                value={profileData.new_email}
-                onChange={(e) => setProfileData({...profileData, new_email: e.target.value})}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-blue-500"
-                required
-                disabled={loading}
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                New Password (optional)
-              </label>
-              <input
-                type="password"
-                value={profileData.new_password}
-                onChange={(e) => setProfileData({...profileData, new_password: e.target.value})}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-blue-500"
-                disabled={loading}
-                placeholder="Leave blank to keep current password"
-                minLength={8}
-              />
-            </div>
-
-            {profileData.new_password && (
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Confirm New Password
-                </label>
-                <input
-                  type="password"
-                  value={profileData.confirm_password}
-                  onChange={(e) => setProfileData({...profileData, confirm_password: e.target.value})}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-blue-500"
-                  disabled={loading}
-                  placeholder="Confirm new password"
-                />
+            {error && (
+              <div className="mb-4 p-3 bg-red-100 border border-red-400 text-red-700 rounded text-sm">
+                {error}
               </div>
             )}
 
-            <div className="flex space-x-3 pt-4">
-              <button
-                type="submit"
-                disabled={loading}
-                className="flex-1 bg-blue-600 text-white py-2 px-4 rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50"
-              >
-                {loading ? (
-                  <span className="flex items-center justify-center">
-                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
-                    Updating...
-                  </span>
-                ) : (
-                  'Update Profile'
-                )}
-              </button>
-              <button
-                type="button"
-                onClick={onClose}
-                disabled={loading}
-                className="flex-1 bg-gray-300 text-gray-700 py-2 px-4 rounded-lg hover:bg-gray-400 transition-colors"
-              >
-                Cancel
-              </button>
-            </div>
-          </form>
+            {success && (
+              <div className="mb-4 p-3 bg-green-100 border border-green-400 text-green-700 rounded text-sm">
+                {success}
+              </div>
+            )}
+
+            <form onSubmit={handleUpdateProfile} className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Name
+                </label>
+                <input
+                  type="text"
+                  value={profileData.new_name}
+                  onChange={(e) => setProfileData({...profileData, new_name: e.target.value})}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-blue-500"
+                  required
+                  disabled={loading}
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Email Address
+                </label>
+                <input
+                  type="email"
+                  value={profileData.new_email}
+                  onChange={(e) => setProfileData({...profileData, new_email: e.target.value})}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-blue-500"
+                  required
+                  disabled={loading}
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  New Password (optional)
+                </label>
+                <input
+                  type="password"
+                  value={profileData.new_password}
+                  onChange={(e) => setProfileData({...profileData, new_password: e.target.value})}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-blue-500"
+                  disabled={loading}
+                  placeholder="Leave blank to keep current password"
+                  minLength={8}
+                />
+              </div>
+
+              {profileData.new_password && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Confirm New Password
+                  </label>
+                  <input
+                    type="password"
+                    value={profileData.confirm_password}
+                    onChange={(e) => setProfileData({...profileData, confirm_password: e.target.value})}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-blue-500"
+                    disabled={loading}
+                    placeholder="Confirm new password"
+                  />
+                </div>
+              )}
+
+              <div className="flex space-x-3 pt-4">
+                <button
+                  type="submit"
+                  disabled={loading}
+                  className="flex-1 bg-blue-600 text-white py-2 px-4 rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50"
+                >
+                  {loading ? (
+                    <span className="flex items-center justify-center">
+                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                      Updating...
+                    </span>
+                  ) : (
+                    'Update Profile'
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={onClose}
+                  disabled={loading}
+                  className="flex-1 bg-gray-300 text-gray-700 py-2 px-4 rounded-lg hover:bg-gray-400 transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          </div>
         </div>
       </div>
-    </div>
+
+      {/* CUSTOM PASSWORD INPUT MODAL */}
+      {showPasswordModal && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[70]">
+              <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4 shadow-xl">
+                  <div className="mb-4">
+                      <h3 className="text-lg font-semibold text-gray-900 mb-2">
+                          🔐 Verify Your Identity
+                      </h3>
+                      <p className="text-gray-600 mb-4">
+                          Please enter your current password to continue:
+                      </p>
+                      <input
+                          type="password"
+                          value={passwordInput}
+                          onChange={(e) => setPasswordInput(e.target.value)}
+                          onKeyPress={(e) => e.key === 'Enter' && handlePasswordConfirm()}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-blue-500"
+                          placeholder="Current password"
+                          autoFocus
+                      />
+                  </div>
+                  
+                  <div className="flex gap-3 justify-end">
+                      <button
+                          onClick={handlePasswordCancel}
+                          className="px-4 py-2 text-gray-600 bg-gray-100 rounded-md hover:bg-gray-200 transition-colors"
+                      >
+                          Cancel
+                      </button>
+                      <button
+                          onClick={handlePasswordConfirm}
+                          disabled={!passwordInput.trim()}
+                          className="px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 transition-colors disabled:opacity-50"
+                      >
+                          Confirm
+                      </button>
+                  </div>
+              </div>
+          </div>
+      )}
+
+      {/* CUSTOM CONFIRMATION MODAL */}
+      {showConfirmModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[60]">
+          <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4 shadow-xl">
+            <div className="mb-4">
+              <h3 className="text-lg font-semibold text-gray-900 mb-2">
+                {confirmModalData.title}
+              </h3>
+              <p className="text-gray-600 whitespace-pre-line">
+                {confirmModalData.message}
+              </p>
+            </div>
+            
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={confirmModalData.onCancel}
+                className="px-4 py-2 text-gray-600 bg-gray-100 rounded-md hover:bg-gray-200 transition-colors"
+              >
+                {confirmModalData.cancelText}
+              </button>
+              <button
+                onClick={confirmModalData.onConfirm}
+                className="px-4 py-2 bg-red-500 text-white rounded-md hover:bg-red-600 transition-colors"
+              >
+                {confirmModalData.confirmText}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 };
-
-
 
 
 // ADD these two missing components before your App component:
@@ -2240,6 +2417,9 @@ const UserDashboard = () => {
   const [aiRecommendations, setAiRecommendations] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState('');
+  
+  // 📱 NEW: Sidebar state for ALL screen sizes
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
   const loadData = React.useCallback(async () => {
     console.log('🔄 Loading data... User:', user?.email, 'Token:', !!token);
@@ -2360,7 +2540,6 @@ const UserDashboard = () => {
   }, [filterItems]);
 
   // FIXED: Enhanced item handlers with better error handling
-
   const handleAddItem = async (formData) => {
     try {
       const result = await apiService.createItem(formData, token);
@@ -2433,8 +2612,7 @@ const UserDashboard = () => {
     }
   };
 
-
-    // Add this component BEFORE the UserDashboard component
+  // Add this component BEFORE the UserDashboard component
   const TermsViewModal = ({ isOpen, onClose }) => {
     const [termsContent, setTermsContent] = useState('');
     const [loading, setLoading] = useState(true);
@@ -2503,37 +2681,37 @@ const UserDashboard = () => {
   };
 
   // Add this function with your other handlers:
-const handleGetAIRecommendations = async () => {
-  setAiLoading(true);
-  setAiError('');
-  
-  try {
-    console.log('🤖 Getting AI recommendations...');
-    const response = await fetch(`${API_BASE}/get-ai-recommendations`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
-      },
-      body: JSON.stringify({})
-    });
+  const handleGetAIRecommendations = async () => {
+    setAiLoading(true);
+    setAiError('');
     
-    const data = await response.json();
-    console.log('🤖 AI response:', data);
-    
-    if (data.success) {
-      setAiRecommendations(data.recommendations);
-      showSuccess('AI recommendations loaded! 🌱');
-    } else {
-      setAiError(data.error || 'Failed to get recommendations');
+    try {
+      console.log('🤖 Getting AI recommendations...');
+      const response = await fetch(`${API_BASE}/get-ai-recommendations`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({})
+      });
+      
+      const data = await response.json();
+      console.log('🤖 AI response:', data);
+      
+      if (data.success) {
+        setAiRecommendations(data.recommendations);
+        showSuccess('AI recommendations loaded! 🌱');
+      } else {
+        setAiError(data.error || 'Failed to get recommendations');
+      }
+    } catch (error) {
+      console.error('🤖 AI error:', error);
+      setAiError('Failed to connect to AI service');
+    } finally {
+      setAiLoading(false);
     }
-  } catch (error) {
-    console.error('🤖 AI error:', error);
-    setAiError('Failed to connect to AI service');
-  } finally {
-    setAiLoading(false);
-  }
-};
+  };
   
   const handleLogout = () => {
     logout(); 
@@ -2570,6 +2748,12 @@ const handleGetAIRecommendations = async () => {
     }
   };
 
+  // 📱 Close sidebar when tab changes (mobile UX)
+  const handleTabChange = (tab) => {
+    setActiveTab(tab);
+    setIsSidebarOpen(false); // Close sidebar on mobile after selection
+  };
+
   // Loading state
   if (loading) {
     return (
@@ -2583,257 +2767,350 @@ const handleGetAIRecommendations = async () => {
   }
   
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Header */}
-      <header className="bg-white shadow-sm border-b">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center py-4">
-            <div className="flex items-center">
-              <h1 className="text-2xl font-bold text-green-800">Project GreenHouse</h1>
-            </div>
-            <div className="flex items-center space-x-4">
-              <div className="flex items-center">
-                <img
-                  src={user?.profile_picture || '/placeholder-avatar.png'}
-                  alt="Profile"
-                  className="w-8 h-8 rounded-full mr-2"
-                  onError={(e) => e.target.src = '/placeholder-avatar.png'}
-                />
-                <span className="text-gray-700">{user?.name || 'User'}</span>
-              </div>
+    <div className="min-h-screen bg-gray-50 flex">
+      {/* 📱 SIDEBAR OVERLAY - ALL SCREEN SIZES */}
+      {isSidebarOpen && (
+        <div 
+          className="fixed inset-0 bg-black bg-opacity-50 z-40"
+          onClick={() => setIsSidebarOpen(false)}
+        />
+      )}
 
-              <button
-                onClick={handleLogout}
-                className="flex items-center px-3 py-2 text-gray-700 hover:text-gray-900 transition-colors"
-              >
-                <LogOut className="w-4 h-4 mr-1" />
-                Logout
-              </button>
-
-            </div>
-          </div>
+      {/* 🔧 COLLAPSIBLE SIDEBAR - ALL SCREEN SIZES */}
+      <div className={`
+        fixed inset-y-0 left-0 z-50 w-64 bg-white shadow-lg transform transition-transform duration-300 ease-in-out
+        ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'}
+      `}>
+        {/* Sidebar Header */}
+        <div className="flex items-center justify-between p-4 border-b">
+          <h2 className="text-lg font-semibold text-green-800">Navigation</h2>
+          {/* Close button - visible on all screen sizes */}
+          <button
+            onClick={() => setIsSidebarOpen(false)}
+            className="p-2 text-gray-500 hover:text-gray-700"
+          >
+            <X className="w-5 h-5" />
+          </button>
         </div>
-      </header>
 
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* Controls */}
-        <div className="mb-6 space-y-4">
-          {/* Tabs */}
-          <div className="flex space-x-1 bg-gray-200 p-1 rounded-lg">
-            <button
-              onClick={() => setActiveTab('all')}
-              className={`flex-1 py-2 px-4 rounded-md font-medium transition-colors ${
-                activeTab === 'all' ? 'bg-white text-green-700 shadow-sm' : 'text-gray-600 hover:text-gray-800'
-              }`}
-            >
-              All Items ({items.length})
-            </button>
-            <button
-              onClick={() => setActiveTab('my-items')}
-              className={`flex-1 py-2 px-4 rounded-md font-medium transition-colors ${
-                activeTab === 'my-items' ? 'bg-white text-green-700 shadow-sm' : 'text-gray-600 hover:text-gray-800'
-              }`}
-            >
-              My Items ({items.filter(item => 
+        {/* Sidebar Navigation */}
+        <nav className="p-4 space-y-2 flex-1 overflow-y-auto">
+          <button
+            onClick={() => handleTabChange('all')}
+            className={`w-full text-left px-4 py-3 rounded-lg transition-colors flex items-center justify-between ${
+              activeTab === 'all' 
+                ? 'bg-green-100 text-green-800 font-medium' 
+                : 'text-gray-700 hover:bg-gray-100'
+            }`}
+          >
+            <span className="flex items-center">
+              <svg className="w-5 h-5 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+              </svg>
+              All Items
+            </span>
+            <span className="bg-gray-200 text-gray-600 text-xs px-2 py-1 rounded-full">
+              {items.filter(item => {
+                const isMyItem = item.owner_email === user?.email || 
+                               item.owner_id === user?.user_id ||
+                               item.owner_id === user?.google_id;
+                return !isMyItem;
+              }).length}
+            </span>
+          </button>
+
+          <button
+            onClick={() => handleTabChange('my-items')}
+            className={`w-full text-left px-4 py-3 rounded-lg transition-colors flex items-center justify-between ${
+              activeTab === 'my-items' 
+                ? 'bg-green-100 text-green-800 font-medium' 
+                : 'text-gray-700 hover:bg-gray-100'
+            }`}
+          >
+            <span className="flex items-center">
+              <User className="w-5 h-5 mr-3" />
+              My Items
+            </span>
+            <span className="bg-gray-200 text-gray-600 text-xs px-2 py-1 rounded-full">
+              {items.filter(item => 
                 item.owner_email === user?.email || 
                 item.owner_id === user?.user_id ||
                 item.owner_id === user?.google_id
-              ).length})
-            </button>
-            
-            
-            <button
-              onClick={() => setActiveTab('claimed')}
-              className={`flex-1 py-2 px-4 rounded-md font-medium transition-colors ${
-                activeTab === 'claimed' ? 'bg-white text-green-700 shadow-sm' : 'text-gray-600 hover:text-gray-800'
-              }`}
-            >
-              My Claims ({myClaims.length})
-            </button>
-            <button
-              onClick={() => setActiveTab('ai-recommendations')}
-              className={`flex-1 py-2 px-4 rounded-md font-medium transition-colors ${
-                activeTab === 'ai-recommendations' ? 'bg-white text-green-700 shadow-sm' : 'text-gray-600 hover:text-gray-800'
-              }`}
-            >
-              AI Recommendations
-            </button>
-          </div>
+              ).length}
+            </span>
+          </button>
 
-          {/* Search and Filters */}
-          {activeTab !== 'ai-recommendations' && ( // ✅ START HERE
-            <div className="flex flex-col sm:flex-row gap-4">
-              {/* All your existing search/filter content stays the same */}
-              <div className="flex-1 relative">
-                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
-                <input
-                  type="text"
-                  placeholder="Search items..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-green-500"
-              />
-            </div>
-            
-            <select
-              value={filterCategory}
-              onChange={(e) => setFilterCategory(e.target.value)}
-              className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-green-500"
-            >
-              <option value="">All Categories</option>
-              {categories.map(cat => (
-                <option key={cat} value={cat}>{cat}</option>
-              ))}
-            </select>
-            
-           
+          <button
+            onClick={() => handleTabChange('claimed')}
+            className={`w-full text-left px-4 py-3 rounded-lg transition-colors flex items-center justify-between ${
+              activeTab === 'claimed' 
+                ? 'bg-green-100 text-green-800 font-medium' 
+                : 'text-gray-700 hover:bg-gray-100'
+            }`}
+          >
+            <span className="flex items-center">
+              <Check className="w-5 h-5 mr-3" />
+              My Claims
+            </span>
+            <span className="bg-gray-200 text-gray-600 text-xs px-2 py-1 rounded-full">
+              {myClaims.length}
+            </span>
+          </button>
+
+          <button
+            onClick={() => handleTabChange('ai-recommendations')}
+            className={`w-full text-left px-4 py-3 rounded-lg transition-colors flex items-center justify-between ${
+              activeTab === 'ai-recommendations' 
+                ? 'bg-green-100 text-green-800 font-medium' 
+                : 'text-gray-700 hover:bg-gray-100'
+            }`}
+          >
+            <span className="flex items-center">
+              <svg className="w-5 h-5 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+              </svg>
+              AI Corner
+            </span>
+            <span className="bg-purple-100 text-purple-600 text-xs px-2 py-1 rounded-full">
+              🤖
+            </span>
+          </button>
+
+          {/* Rules & Regulations - RIGHT BELOW AI Corner */}
+          <div className="pt-2 border-t border-gray-200">
             <button
-              onClick={() => setShowTermsModal(true)}
-              className="flex items-center px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
+              onClick={() => {
+                setShowTermsModal(true);
+                setIsSidebarOpen(false); // Close sidebar when opening modal
+              }}
+              className="w-full text-left px-4 py-3 text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded-lg transition-colors flex items-center"
             >
+              <svg className="w-5 h-5 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
               Rules & Regulations
             </button>
+          </div>
+        </nav>
+      </div>
 
-            <button
-              onClick={() => setShowModal(true)}
-              className="flex items-center px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
-            >
-              <Plus className="w-4 h-4 mr-1" />
-              Add Item
-              </button>
-            </div>
-          )}
-        </div>
-
-        {/* Items Grid */}
-        {activeTab !== 'ai-recommendations' && (
-          <>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {filteredItems.map(item => (
-                <ItemCard
-                  key={item.item_id}
-                  item={item}
-                  currentUser={user}
-                  onClaim={handleClaimItem}
-                  onEdit={setEditingItem}
-                  onDelete={handleDeleteItem}
-                  onChatToggle={handleChatToggle}
-                  showChat={chatState[item.item_id]}
-                  chatMessages={chatMessages[item.item_id] || []}
-                  onSendMessage={() => handleSendMessage(item.item_id)}
-                  newMessage={newMessages[item.item_id] || ''}
-                  setNewMessage={(message) => setNewMessages(prev => ({
-                    ...prev,
-                    [item.item_id]: message
-                  }))}
-                />
-              ))}
-            </div>
-
-            {filteredItems.length === 0 && (
-              <div className="text-center py-12">
-                <p className="text-gray-500 text-lg">
-                  {loading ? 'Loading items...' : 'No items found'}
-                </p>
-                {activeTab === 'all' && !loading && (
-                  <p className="text-gray-400 mt-2">Be the first to add an item to the community!</p>
-                )}
-              </div>
-            )}
-          </>
-        )}
-
- {/* 🤖 ADD THE AI CONTENT RIGHT HERE - AFTER THE ITEMS GRID */}
- {activeTab === 'ai-recommendations' && (
-          <div className="space-y-6">
-            <div className="text-center">
-              <h2 className="text-2xl font-bold text-green-800 mb-4">
-                AI Recommendations
-              </h2>
-              <p className="text-gray-600 mb-6">
-                Get creative suggestions on how to reuse recyclable materials from your PUP community!
-              </p>
-              
-              <button
-                onClick={handleGetAIRecommendations}
-                disabled={aiLoading}
-                className="px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {aiLoading ? (
-                  <span className="flex items-center justify-center">
-                    <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2"></div>
-                    Getting Suggestions...
-                  </span>
-                ) : (
-                  '🌱 Get Smart Suggestions'
-                )}
-              </button>
-            </div>
-
-            {/* AI Response */}
-            {aiRecommendations && (
-              <div className="bg-white rounded-lg shadow-md p-6">
-                <div className="whitespace-pre-wrap text-gray-700 leading-relaxed">
-                  {aiRecommendations}
-                </div>
-              </div>
-            )}
-
-            {/* Error Display */}
-            {aiError && (
-              <div className="bg-red-50 border border-red-200 text-red-700 rounded-lg p-4">
-                <div className="flex items-center">
-                  <svg className="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 20 20">
-                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+      {/* 📱 MAIN CONTENT AREA - Full Width */}
+      <div className="flex-1 flex flex-col min-h-screen">
+        {/* 🔧 TOP HEADER - With Hamburger for All Screen Sizes */}
+        <header className="bg-white shadow-sm border-b">
+          <div className="px-4 sm:px-6 lg:px-8">
+            <div className="flex justify-between items-center py-4">
+              <div className="flex items-center">
+                {/* 📱 Hamburger Menu - All Screen Sizes */}
+                <button
+                  onClick={() => setIsSidebarOpen(true)}
+                  className="p-2 text-gray-500 hover:text-gray-700 mr-3"
+                >
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
                   </svg>
-                  {aiError}
-                </div>
+                </button>
+                
+                <h1 className="text-xl lg:text-2xl font-bold text-green-800">Project GreenHouse</h1>
               </div>
-            )}
+              
+              <div className="flex items-center space-x-2 lg:space-x-4">
+                <div className="hidden sm:flex items-center">
+                  <img
+                    src={user?.profile_picture || '/placeholder-avatar.png'}
+                    alt="Profile"
+                    className="w-6 h-6 lg:w-8 lg:h-8 rounded-full mr-2"
+                    onError={(e) => e.target.src = '/placeholder-avatar.png'}
+                  />
+                  <span className="text-gray-700 text-sm lg:text-base">{user?.name || 'User'}</span>
+                </div>
 
-            {/* No recommendations yet */}
-            {!aiRecommendations && !aiLoading && !aiError && (
-              <div className="text-center py-12">
-                <div className="text-6xl mb-4">🤖</div>
-                <p className="text-gray-500 text-lg">
-                  Click the button above to get personalized recycling suggestions!
-                </p>
-                <p className="text-gray-400 text-sm mt-2">
-                  Our AI will analyze available materials and give you creative Filipino ideas!
-                </p>
+                <button
+                  onClick={handleLogout}
+                  className="flex items-center px-2 lg:px-3 py-2 text-gray-700 hover:text-gray-900 transition-colors"
+                >
+                  <LogOut className="w-4 h-4 mr-1" />
+                  <span className="hidden sm:inline">Logout</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </header>
+
+        {/* 🔧 MAIN CONTENT - Responsive with Centered Layout */}
+        <main className="flex-1 px-4 sm:px-6 lg:px-8 xl:px-16 2xl:px-32 py-4 lg:py-8 max-w-7xl mx-auto w-full">
+          {/* 📱 CONTROLS BAR - Responsive */}
+          <div className="mb-4 lg:mb-6 space-y-4 max-w-6xl mx-auto">
+            {/* Search and Filters - Only show when not on AI tab */}
+            {activeTab !== 'ai-recommendations' && (
+              <div className="flex flex-col sm:flex-row gap-2 lg:gap-4 items-stretch sm:items-center">
+                {/* Search */}
+                <div className="flex-[2] relative">
+                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
+                  <input
+                    type="text"
+                    placeholder="Search items..."
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    className="w-full pl-10 pr-4 py-2.5 text-sm lg:text-base border border-gray-300 rounded-lg focus:outline-none focus:border-green-500 h-11"
+                  />
+                </div>
+                
+                {/* Category Filter */}
+                <div className="flex-[0.7]">
+                  <select
+                    value={filterCategory}
+                    onChange={(e) => setFilterCategory(e.target.value)}
+                    className="w-full px-3 lg:px-4 py-2.5 text-sm lg:text-base border border-gray-300 rounded-lg focus:outline-none focus:border-green-500 h-11"
+                  >
+                    <option value="">All Categories</option>
+                    {categories.map(cat => (
+                      <option key={cat} value={cat}>{cat}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Add Item Button */}
+                <div className="flex-[0.6]">
+                  <button
+                    onClick={() => setShowModal(true)}
+                    className="w-full flex items-center justify-center px-4 lg:px-6 py-2.5 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-sm lg:text-base whitespace-nowrap h-11"
+                  >
+                    <Plus className="w-4 h-4 mr-1" />
+                    <span className="hidden sm:inline">Add Item</span>
+                    <span className="sm:hidden">Add</span>
+                  </button>
+                </div>
               </div>
             )}
           </div>
-        )}
 
+          {/* 📱 CONTENT AREA - Responsive Grid with Centered Layout */}
+          {activeTab !== 'ai-recommendations' && (
+            <div className="max-w-6xl mx-auto">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 gap-4 lg:gap-6">
+                {filteredItems.map(item => (
+                  <ItemCard
+                    key={item.item_id}
+                    item={item}
+                    currentUser={user}
+                    onClaim={handleClaimItem}
+                    onEdit={setEditingItem}
+                    onDelete={handleDeleteItem}
+                    onChatToggle={handleChatToggle}
+                    showChat={chatState[item.item_id]}
+                    chatMessages={chatMessages[item.item_id] || []}
+                    onSendMessage={() => handleSendMessage(item.item_id)}
+                    newMessage={newMessages[item.item_id] || ''}
+                    setNewMessage={(message) => setNewMessages(prev => ({
+                      ...prev,
+                      [item.item_id]: message
+                    }))}
+                  />
+                ))}
+              </div>
+
+              {filteredItems.length === 0 && (
+                <div className="text-center py-12">
+                  <p className="text-gray-500 text-lg">
+                    {loading ? 'Loading items...' : 'No items found'}
+                  </p>
+                  {activeTab === 'all' && !loading && (
+                    <p className="text-gray-400 mt-2">Be the first to add an item to the community!</p>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* 🤖 AI RECOMMENDATIONS TAB - Responsive with Centered Layout */}
+          {activeTab === 'ai-recommendations' && (
+            <div className="space-y-6 max-w-4xl mx-auto">
+              <div className="text-center">
+                <h2 className="text-xl lg:text-2xl font-bold text-green-800 mb-4">
+                  AI Recommendations
+                </h2>
+                <p className="text-gray-600 mb-6 text-sm lg:text-base">
+                  Get creative suggestions on how to reuse recyclable materials from your PUP community!
+                </p>
+                
+                <button
+                  onClick={handleGetAIRecommendations}
+                  disabled={aiLoading}
+                  className="px-4 lg:px-6 py-2 lg:py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm lg:text-base"
+                >
+                  {aiLoading ? (
+                    <span className="flex items-center justify-center">
+                      <div className="animate-spin rounded-full h-4 w-4 lg:h-5 lg:w-5 border-b-2 border-white mr-2"></div>
+                      Getting Suggestions...
+                    </span>
+                  ) : (
+                    '🌱 Get Smart Suggestions'
+                  )}
+                </button>
+              </div>
+
+              {/* AI Response */}
+              {aiRecommendations && (
+                <div className="bg-white rounded-lg shadow-md p-4 lg:p-6">
+                  <div className="whitespace-pre-wrap text-gray-700 leading-relaxed text-sm lg:text-base">
+                    {aiRecommendations}
+                  </div>
+                </div>
+              )}
+
+              {/* Error Display */}
+              {aiError && (
+                <div className="bg-red-50 border border-red-200 text-red-700 rounded-lg p-4">
+                  <div className="flex items-center">
+                    <svg className="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                      <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                    </svg>
+                    <span className="text-sm lg:text-base">{aiError}</span>
+                  </div>
+                </div>
+              )}
+
+              {/* No recommendations yet */}
+              {!aiRecommendations && !aiLoading && !aiError && (
+                <div className="text-center py-12">
+                  <div className="text-4xl lg:text-6xl mb-4">🤖</div>
+                  <p className="text-gray-500 text-lg">
+                    Click the button above to get personalized recycling suggestions!
+                  </p>
+                  <p className="text-gray-400 text-sm mt-2">
+                    Our AI will analyze available materials and give you creative Filipino ideas!
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+        </main>
       </div>
 
-        {/* Add/Edit Modal */}
-        <ItemModal
-          isOpen={showModal || !!editingItem}
-          onClose={() => {
-            setShowModal(false);
-            setEditingItem(null);
-          }}
-          item={editingItem}
-          onSave={editingItem ? handleEditItem : handleAddItem}
-          locations={locations}
-          categories={categories}
-          />
-        
-        <TermsViewModal
+      {/* Your existing modals stay the same */}
+      <ItemModal
+        isOpen={showModal || !!editingItem}
+        onClose={() => {
+          setShowModal(false);
+          setEditingItem(null);
+        }}
+        item={editingItem}
+        onSave={editingItem ? handleEditItem : handleAddItem}
+        locations={locations}
+        categories={categories}
+      />
+      
+      <TermsViewModal
         isOpen={showTermsModal}
         onClose={() => setShowTermsModal(false)}
       />
-      
     </div>
   );
 };
 
 
 // Admin Dashboard Component
-
-// Admin Dashboard Component - COMPLETE FIXED VERSION
 const AdminDashboard = () => {
   const { user, token, logout } = useAuth();
   const [activeTab, setActiveTab] = useState('pending');

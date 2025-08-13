@@ -2066,6 +2066,19 @@ async def debug_items():
     except Exception as e:
         return {"error": str(e)}
 
+@app.post("/admin/verify-password")
+async def verify_current_password(request: dict, token_data: dict = Depends(admin_required)):
+    """Verify admin's current password"""
+    try:
+        email = request.get("email")
+        password = request.get("password")
+        
+        result = admin_manager.authenticate_admin(email, password)
+        
+        return {"success": result["success"]}
+        
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 
 @app.delete("/admin/users/{google_id}")
