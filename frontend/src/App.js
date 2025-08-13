@@ -5,9 +5,6 @@ import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate } from 'r
 // Auth Context
 const AuthContext = createContext();
 
-// STEP 1: Add this RIGHT AFTER your AuthContext (around line 60 in App.js)
-
-// Add this AFTER the AuthProvider component:
 const NotificationContext = createContext();
 
 const NotificationProvider = ({ children }) => {
@@ -589,7 +586,6 @@ const apiService = {
     }
   },
   
-  // ✅ ADD THESE NEW API FUNCTIONS:
   getApprovedItems: async (token) => {
     try {
       const response = await fetch(`${API_BASE}/admin/items/approved`, {
@@ -620,11 +616,42 @@ const apiService = {
   getCategories: async () => {
     const response = await fetch(`${API_BASE}/categories`);
     return response.json();
-  }
+  },
+
+    // Notification API functions
+    getNotifications: async (token) => {
+      const response = await fetch(`${API_BASE}/notifications`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      return response.json();
+    },
+  
+    markNotificationRead: async (notificationId, token) => {
+      const response = await fetch(`${API_BASE}/notifications/${notificationId}/read`, {
+        method: 'PUT',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      return response.json();
+    },
+  
+    markAllNotificationsRead: async (token) => {
+      const response = await fetch(`${API_BASE}/notifications/mark-all-read`, {
+        method: 'PUT',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      return response.json();
+    },
+  
+    getUnreadNotificationCount: async (token) => {
+      const response = await fetch(`${API_BASE}/notifications/unread-count`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      return response.json();
+    }
+
 };
 
 // Google OAuth Component
-// Google OAuth Component - FIXED VERSION
 const GoogleLoginButton = ({ onSuccess, onError }) => {
   useEffect(() => {
     const initializeGoogleSignIn = () => {
@@ -1809,39 +1836,11 @@ const ItemCard = ({ item, onClaim, onEdit, onDelete, currentUser, onChatToggle, 
   return (
     <div className="bg-white rounded-lg shadow-md overflow-hidden">
       {/* MANDATORY IMAGE DISPLAY - Always show since images are required */}
-      <div className="relative">
-        {(item.images || item.image_urls) && (item.images || item.image_urls).length > 0 ? (
-          <>
-            <img 
-              src={(item.images || item.image_urls)[0]} 
-              alt={item.name} 
-              className="w-full h-400 object-cover"
-              onError={(e) => {
-                // Fallback to placeholder if image fails to load
-                e.target.src = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMzAwIiBoZWlnaHQ9IjIwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSIjZGRkIi8+PHRleHQgeD0iNTAlIiB5PSI1MCUiIGZvbnQtZmFtaWx5PSJBcmlhbCIgZm9udC1zaXplPSIxNCIgZmlsbD0iIzk5OSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZHk9Ii4zZW0iPkltYWdlIE5vdCBGb3VuZDwvdGV4dD48L3N2Zz4=';
-                console.log('Image failed to load, using placeholder:', e.target.src);
-              }}
-            />
-            
-            {/* Show image count if multiple images */}
-            {(item.images || item.image_urls).length > 1 && (
-              <div className="absolute top-2 right-2 bg-black bg-opacity-75 text-white text-xs px-2 py-1 rounded-full">
-                +{(item.images || item.image_urls).length - 1} more
-              </div>
-            )}
-          </>
-        ) : (
-          // Fallback placeholder (this shouldn't happen since images are mandatory)
-          <div className="w-full h-48 bg-gray-200 flex items-center justify-center">
-            <div className="text-center text-gray-500">
-              <svg className="w-12 h-12 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-              </svg>
-              <span className="text-sm">No Image Available</span>
-            </div>
-          </div>
-        )}
-      </div>
+        {/* Image Carousel with Navigation */}
+          <ImageCarousel 
+            images={item.images || item.image_urls || []} 
+            alt={item.name}
+          />
       
       <div className="p-4">
         <div className="flex justify-between items-start mb-2">
@@ -1995,6 +1994,7 @@ const ItemCard = ({ item, onClaim, onEdit, onDelete, currentUser, onChatToggle, 
 
 // Add/Edit Item Modal
 const ItemModal = ({ isOpen, onClose, item, onSave, locations, categories }) => {
+  const [imagePreviews, setImagePreviews] = useState([]);
   const [formData, setFormData] = useState({
     name: '',
     quantity: 1,
@@ -2004,11 +2004,11 @@ const ItemModal = ({ isOpen, onClose, item, onSave, locations, categories }) => 
     duration_days: 7,
     comments: '',
     contact_info: '',
-    images: null
+    images: null,
   });
   const [loading, setLoading] = useState(false);
   const [errors, setErrors] = useState({});
-
+  
   // ✅ FIX: Add useEffect to populate form when editing
   useEffect(() => {
     if (item && isOpen) {
@@ -2061,18 +2061,22 @@ const ItemModal = ({ isOpen, onClose, item, onSave, locations, categories }) => 
       newErrors.location = 'Location is required';
     }
 
+        // Contact info validation - OPTIONAL but must be valid if provided
+    if (formData.contact_info && formData.contact_info.trim()) {
+      const phoneNumber = formData.contact_info.trim();
+      
+      if (!phoneNumber.startsWith('09')) {
+        newErrors.contact_info = 'Must start with 09';
+      } else if (phoneNumber.length !== 11) {
+        newErrors.contact_info = 'Must be exactly 11 digits';
+      } else if (!/^\d+$/.test(phoneNumber)) {
+        newErrors.contact_info = 'Numbers only';
+      }
+    }
+
     // Expiry date validation
     if (!formData.expiry_date) {
       newErrors.expiry_date = 'Expiry date is required';
-    } else {
-      // Check if date is not in the past
-      const selectedDate = new Date(formData.expiry_date);
-      const today = new Date();
-      today.setHours(0, 0, 0, 0); // Reset time for accurate comparison
-      
-      if (selectedDate < today) {
-        newErrors.expiry_date = 'Expiry date cannot be in the past';
-      }
     }
 
     // Comments validation
@@ -2251,7 +2255,7 @@ const ItemModal = ({ isOpen, onClose, item, onSave, locations, categories }) => 
               </select>
               {errors.location && <p className="text-red-500 text-xs mt-1">{errors.location}</p>}
             </div>
-            
+                        
             {/* Expiry Date - REQUIRED */}
             <div className="mb-4">
               <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -2267,29 +2271,14 @@ const ItemModal = ({ isOpen, onClose, item, onSave, locations, categories }) => 
                 required
                 disabled={loading}
                 min={new Date().toISOString().split('T')[0]}
+                max="2030-12-31" // Reasonable future limit
               />
               {errors.expiry_date && <p className="text-red-500 text-xs mt-1">{errors.expiry_date}</p>}
-            </div>
-            
-            {/* Duration Days */}
-            <div className="mb-4">
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Duration (Days) <span className="text-red-500">*</span>
-              </label>
-              <select
-                value={formData.duration_days}
-                onChange={(e) => setFormData({...formData, duration_days: parseInt(e.target.value)})}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-green-500 transition-colors"
-                disabled={loading}
-              >
-                <option value={1}>1 day</option>
-                <option value={3}>3 days</option>
-                <option value={7}>1 week</option>
-                <option value={14}>2 weeks</option>
-                <option value={30}>1 month</option>
-              </select>
-            </div>
-            
+              <p className="text-xs text-gray-500 mt-1">
+                Select when this item will no longer be available
+              </p>
+            </div>                                                      
+
             {/* Comments - REQUIRED */}
             <div className="mb-4">
               <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -2317,49 +2306,143 @@ const ItemModal = ({ isOpen, onClose, item, onSave, locations, categories }) => 
               </div>
             </div>
             
-            {/* Contact Info - REQUIRED */}
+           {/* Contact Info - OPTIONAL */}
             <div className="mb-4">
               <label className="block text-sm font-medium text-gray-700 mb-2">
-                Contact Information <span className="text-red-500">*</span>
+                Contact Information
               </label>
-              <input
-                type="text"
-                placeholder="Phone number, email, or other contact method"
-                value={formData.contact_info}
-                onChange={(e) => setFormData({...formData, contact_info: e.target.value})}
-                className={`w-full px-3 py-2 border rounded-lg focus:outline-none transition-colors ${
-                  errors.contact_info ? 'border-red-500 focus:border-red-500' : 'border-gray-300 focus:border-green-500'
-                }`}
-                required
-                disabled={loading}
-                maxLength={100}
-              />
+              <div className="flex">
+                <span className="inline-flex items-center px-3 text-sm text-gray-900 bg-gray-200 border border-r-0 border-gray-300 rounded-l-md">
+                  09
+                </span>
+                <input
+                  type="text"
+                  placeholder="171234567"
+                  value={formData.contact_info.replace('09', '')} // Remove 09 if it exists
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    // Only allow numbers and limit to 9 digits (after 09)
+                    if (/^\d*$/.test(value) && value.length <= 9) {
+                      setFormData({...formData, contact_info: '09' + value});
+                    }
+                  }}
+                  className={`flex-1 px-3 py-2 border rounded-r-lg focus:outline-none transition-colors ${
+                    errors.contact_info ? 'border-red-500 focus:border-red-500' : 'border-gray-300 focus:border-green-500'
+                  }`}
+                  disabled={loading}
+                  maxLength={9}
+                />
+              </div>
               {errors.contact_info && <p className="text-red-500 text-xs mt-1">{errors.contact_info}</p>}
-            </div>
-            
+              <p className="text-xs text-gray-500 mt-1">
+                Enter 9 more digits after 09 (total 11 digits)
+              </p>
+            </div>                                  
+
             {/* Images - REQUIRED for new items */}
             {!item && (
               <div className="mb-6">
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   Images <span className="text-red-500">*</span>
                 </label>
-                <input
-                  type="file"
-                  multiple
-                  accept="image/jpeg,image/png,image/jpg,image/gif"
-                  onChange={(e) => setFormData({...formData, images: e.target.files})}
-                  className={`w-full px-3 py-2 border rounded-lg focus:outline-none transition-colors ${
-                    errors.images ? 'border-red-500 focus:border-red-500' : 'border-gray-300 focus:border-green-500'
-                  }`}
-                  required
-                  disabled={loading}
-                />
+                
+                {/* File Input */}
+                <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-green-500 transition-colors">
+                  <input
+                    type="file"
+                    multiple
+                    accept="image/jpeg,image/png,image/jpg,image/gif"
+                    onChange={(e) => {
+                      const files = e.target.files;
+                      setFormData({...formData, images: files});
+                      
+                      // Create previews
+                      const previews = [];
+                      for (let i = 0; i < files.length; i++) {
+                        const file = files[i];
+                        const reader = new FileReader();
+                        reader.onload = (e) => {
+                          previews.push({
+                            file: file,
+                            url: e.target.result,
+                            name: file.name,
+                            size: file.size
+                          });
+                          if (previews.length === files.length) {
+                            setImagePreviews(previews);
+                          }
+                        };
+                        reader.readAsDataURL(file);
+                      }
+                    }}
+                    className={`w-full px-3 py-2 border rounded-lg focus:outline-none transition-colors ${
+                      errors.images ? 'border-red-500 focus:border-red-500' : 'border-gray-300 focus:border-green-500'
+                    }`}
+                    required
+                    disabled={loading}
+                    id="image-upload"
+                  />
+                  
+                  <div className="mt-2">
+                    <svg className="mx-auto h-12 w-12 text-gray-400" stroke="currentColor" fill="none" viewBox="0 0 48 48">
+                      <path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8m-12 4h.02" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                    <p className="mt-2 text-sm text-gray-600">
+                      <label htmlFor="image-upload" className="cursor-pointer text-green-600 hover:text-green-500">
+                        Click to upload
+                      </label> or drag and drop
+                    </p>
+                    <p className="text-xs text-gray-500">PNG, JPG, GIF up to 5MB each</p>
+                  </div>
+                </div>
+                
                 {errors.images && <p className="text-red-500 text-xs mt-1">{errors.images}</p>}
-                <p className="text-xs text-gray-500 mt-1">
-                  Upload at least one clear photo. Accepted formats: JPG, PNG, GIF (max 5MB each)
-                </p>
+                
+                {/* Image Previews */}
+                {imagePreviews.length > 0 && (
+                  <div className="mt-4">
+                    <h4 className="text-sm font-medium text-gray-700 mb-2">
+                      Selected Images ({imagePreviews.length})
+                    </h4>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+                      {imagePreviews.map((preview, index) => (
+                        <div key={index} className="relative group">
+                          <img
+                            src={preview.url}
+                            alt={`Preview ${index + 1}`}
+                            className="w-full h-24 object-cover rounded-lg border border-gray-200"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => {
+                              // Remove image from previews
+                              const newPreviews = imagePreviews.filter((_, i) => i !== index);
+                              setImagePreviews(newPreviews);
+                              
+                              // Update formData.images
+                              const dt = new DataTransfer();
+                              for (let i = 0; i < formData.images.length; i++) {
+                                if (i !== index) {
+                                  dt.items.add(formData.images[i]);
+                                }
+                              }
+                              setFormData({...formData, images: dt.files});
+                            }}
+                            className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs hover:bg-red-600 opacity-0 group-hover:opacity-100 transition-opacity"
+                          >
+                            ×
+                          </button>
+                          <div className="absolute bottom-0 left-0 right-0 bg-black bg-opacity-50 text-white text-xs p-1 rounded-b-lg truncate">
+                            {preview.name}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
+
             
             <div className="flex space-x-3">
               <button
@@ -2392,6 +2475,100 @@ const ItemModal = ({ isOpen, onClose, item, onSave, locations, categories }) => 
   );
 };
 
+const ImageCarousel = ({ images, alt = "Item image" }) => {
+  const [currentIndex, setCurrentIndex] = useState(0);
+  
+  if (!images || images.length === 0) {
+    return (
+      <div className="w-full h-48 bg-gray-200 flex items-center justify-center rounded-lg">
+        <span className="text-gray-500">No images available</span>
+      </div>
+    );
+  }
+
+  const nextImage = () => {
+    setCurrentIndex((prev) => (prev + 1) % images.length);
+  };
+
+  const prevImage = () => {
+    setCurrentIndex((prev) => (prev - 1 + images.length) % images.length);
+  };
+
+  const goToImage = (index) => {
+    setCurrentIndex(index);
+  };
+
+  return (
+    <div className="relative">
+      {/* Main Image */}
+      <div className="relative w-full bg-gray-100 rounded-lg overflow-hidden">
+        <img
+          src={images[currentIndex]}
+          alt={`${alt} ${currentIndex + 1}`}
+          className="w-full object-contain"
+          onError={(e) => {
+            e.target.src = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMzAwIiBoZWlnaHQ9IjIwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSIjZGRkIi8+PHRleHQgeD0iNTAlIiB5PSI1MCUiIGZvbnQtZmFtaWx5PSJBcmlhbCIgZm9udC1zaXplPSIxNCIgZmlsbD0iIzk5OSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZHk9Ii4zZW0iPkltYWdlIE5vdCBGb3VuZDwvdGV4dD48L3N2Zz4=';
+          }}
+        />
+        
+        {/* Navigation Arrows - Only show if more than 1 image */}
+        {images.length > 1 && (
+          <>
+            <button
+              onClick={prevImage}
+              className="absolute left-2 top-1/2 transform -translate-y-1/2 bg-black bg-opacity-50 text-white rounded-full w-8 h-8 flex items-center justify-center hover:bg-opacity-75 transition-all"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+              </svg>
+            </button>
+            <button
+              onClick={nextImage}
+              className="absolute right-2 top-1/2 transform -translate-y-1/2 bg-black bg-opacity-50 text-white rounded-full w-8 h-8 flex items-center justify-center hover:bg-opacity-75 transition-all"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+              </svg>
+            </button>
+          </>
+        )}
+        
+        {/* Image Counter */}
+        {images.length > 1 && (
+          <div className="absolute top-2 right-2 bg-black bg-opacity-75 text-white text-xs px-2 py-1 rounded-full">
+            {currentIndex + 1} / {images.length}
+          </div>
+        )}
+      </div>
+      
+      {/* Thumbnail Navigation - Only show if more than 1 image */}
+      {images.length > 1 && (
+        <div className="flex gap-2 mt-3 overflow-x-auto pb-2">
+          {images.map((image, index) => (
+            <button
+              key={index}
+              onClick={() => goToImage(index)}
+              className={`flex-shrink-0 w-16 h-16 rounded-lg overflow-hidden border-2 transition-all ${
+                index === currentIndex 
+                  ? 'border-green-500 ring-2 ring-green-200' 
+                  : 'border-gray-200 hover:border-gray-300'
+              }`}
+            >
+              <img
+                src={image}
+                alt={`Thumbnail ${index + 1}`}
+                className="w-full object-contain"
+                onError={(e) => {
+                  e.target.src = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNjQiIGhlaWdodD0iNjQiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PHJlY3Qgd2lkdGg9IjEwMCUiIGhlaWdodD0iMTAwJSIgZmlsbD0iI2RkZCIvPjx0ZXh0IHg9IjUwJSIgeT0iNTAlIiBmb250LWZhbWlseT0iQXJpYWwiIGZvbnQtc2l6ZT0iMTAiIGZpbGw9IiM5OTkiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGR5PSIuM2VtIj5OL0E8L3RleHQ+PC9zdmc+';
+                }}
+              />
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
 
 // User Dashboard
 const UserDashboard = () => {
@@ -2680,7 +2857,211 @@ const UserDashboard = () => {
     );
   };
 
-  // Add this function with your other handlers:
+  const NotificationBell = ({ user, token }) => {
+    const [notifications, setNotifications] = useState([]);
+    const [unreadCount, setUnreadCount] = useState(0);
+    const [isOpen, setIsOpen] = useState(false);
+    const [loading, setLoading] = useState(false);
+  
+    // Load notifications and unread count
+    const loadNotifications = async () => {
+      try {
+        const [notificationsData, unreadData] = await Promise.all([
+          apiService.getNotifications(token),
+          apiService.getUnreadNotificationCount(token)
+        ]);
+        
+        setNotifications(notificationsData || []);
+        setUnreadCount(unreadData?.unread_count || 0);
+      } catch (error) {
+        console.error('Error loading notifications:', error);
+      }
+    };
+  
+    // Load notifications on mount and periodically
+    useEffect(() => {
+      if (token && user) {
+        loadNotifications();
+        
+        // Refresh every 30 seconds
+        const interval = setInterval(loadNotifications, 30000);
+        return () => clearInterval(interval);
+      }
+    }, [token, user]);
+  
+    // Mark notification as read
+    const markAsRead = async (notificationId) => {
+      try {
+        await apiService.markNotificationRead(notificationId, token);
+        // Update local state
+        setNotifications(prev => 
+          prev.map(notif => 
+            notif.notification_id === notificationId 
+              ? { ...notif, is_read: true }
+              : notif
+          )
+        );
+        setUnreadCount(prev => Math.max(0, prev - 1));
+      } catch (error) {
+        console.error('Error marking notification as read:', error);
+      }
+    };
+  
+    // Mark all as read
+    const markAllAsRead = async () => {
+      try {
+        setLoading(true);
+        await apiService.markAllNotificationsRead(token);
+        setNotifications(prev => prev.map(notif => ({ ...notif, is_read: true })));
+        setUnreadCount(0);
+      } catch (error) {
+        console.error('Error marking all as read:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+  
+    // Format time ago
+    const timeAgo = (dateString) => {
+      const now = new Date();
+      const date = new Date(dateString);
+      const diffInMs = now - date;
+      const diffInMinutes = Math.floor(diffInMs / (1000 * 60));
+      const diffInHours = Math.floor(diffInMinutes / 60);
+      const diffInDays = Math.floor(diffInHours / 24);
+  
+      if (diffInMinutes < 1) return 'Just now';
+      if (diffInMinutes < 60) return `${diffInMinutes}m ago`;
+      if (diffInHours < 24) return `${diffInHours}h ago`;
+      if (diffInDays < 7) return `${diffInDays}d ago`;
+      return date.toLocaleDateString();
+    };
+  
+    // Get notification icon
+    const getNotificationIcon = (type) => {
+      switch (type) {
+        case 'item_approved': return '🎉';
+        case 'item_rejected': return '❌';
+        case 'item_claimed': return '🎯';
+        case 'new_message': return '💬';
+        default: return '🔔';
+      }
+    };
+  
+    return (
+      <div className="relative">
+        {/* Notification Bell Button */}
+        <button
+          onClick={() => setIsOpen(!isOpen)}
+          className="relative p-2 text-gray-700 hover:text-gray-900 transition-colors"
+        >
+          <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+          </svg>
+          
+          {/* Unread Count Badge */}
+          {unreadCount > 0 && (
+            <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full h-5 w-5 flex items-center justify-center">
+              {unreadCount > 99 ? '99+' : unreadCount}
+            </span>
+          )}
+        </button>
+  
+        {/* Notification Dropdown */}
+        {isOpen && (
+          <>
+            {/* Overlay */}
+            <div 
+              className="fixed inset-0 z-10" 
+              onClick={() => setIsOpen(false)}
+            />
+            
+            {/* Dropdown */}
+            <div className="absolute right-0 mt-2 w-80 bg-white rounded-lg shadow-xl border border-gray-200 z-20">
+              {/* Header */}
+              <div className="p-4 border-b border-gray-200">
+                <div className="flex justify-between items-center">
+                  <h3 className="text-lg font-semibold text-gray-800">Notifications</h3>
+                  {unreadCount > 0 && (
+                    <button
+                      onClick={markAllAsRead}
+                      disabled={loading}
+                      className="text-sm text-blue-600 hover:text-blue-800 disabled:opacity-50"
+                    >
+                      {loading ? 'Marking...' : 'Mark all read'}
+                    </button>
+                  )}
+                </div>
+              </div>
+  
+              {/* Notifications List */}
+              <div className="max-h-96 overflow-y-auto">
+                {notifications.length === 0 ? (
+                  <div className="p-8 text-center text-gray-500">
+                    <svg className="w-12 h-12 mx-auto mb-4 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+                    </svg>
+                    <p>No notifications yet</p>
+                    <p className="text-sm mt-1">We'll notify you when something happens!</p>
+                  </div>
+                ) : (
+                  notifications.map((notification) => (
+                    <div
+                      key={notification.notification_id}
+                      className={`p-4 border-b border-gray-100 hover:bg-gray-50 cursor-pointer transition-colors ${
+                        !notification.is_read ? 'bg-blue-50 border-l-4 border-l-blue-500' : ''
+                      }`}
+                      onClick={() => {
+                        if (!notification.is_read) {
+                          markAsRead(notification.notification_id);
+                        }
+                        setIsOpen(false);
+                        // Navigate to action_url if needed
+                        if (notification.action_url) {
+                          // You can add navigation logic here
+                        }
+                      }}
+                    >
+                      <div className="flex items-start space-x-3">
+                        <span className="text-lg">{getNotificationIcon(notification.type)}</span>
+                        <div className="flex-1 min-w-0">
+                          <p className={`text-sm font-medium text-gray-900 ${!notification.is_read ? 'font-semibold' : ''}`}>
+                            {notification.title}
+                          </p>
+                          <p className="text-sm text-gray-600 mt-1">
+                            {notification.message}
+                          </p>
+                          <p className="text-xs text-gray-400 mt-1">
+                            {timeAgo(notification.created_at)}
+                          </p>
+                        </div>
+                        {!notification.is_read && (
+                          <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
+                        )}
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+  
+              {/* Footer */}
+              {notifications.length > 0 && (
+                <div className="p-3 border-t border-gray-200 text-center">
+                  <button 
+                    onClick={() => setIsOpen(false)}
+                    className="text-sm text-gray-600 hover:text-gray-800"
+                  >
+                    Close
+                  </button>
+                </div>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+    );
+  };
+  
   const handleGetAIRecommendations = async () => {
     setAiLoading(true);
     setAiError('');
@@ -2914,25 +3295,27 @@ const UserDashboard = () => {
                 <h1 className="text-xl lg:text-2xl font-bold text-green-800">Project GreenHouse</h1>
               </div>
               
-              <div className="flex items-center space-x-2 lg:space-x-4">
-                <div className="hidden sm:flex items-center">
-                  <img
-                    src={user?.profile_picture || '/placeholder-avatar.png'}
-                    alt="Profile"
-                    className="w-6 h-6 lg:w-8 lg:h-8 rounded-full mr-2"
-                    onError={(e) => e.target.src = '/placeholder-avatar.png'}
-                  />
-                  <span className="text-gray-700 text-sm lg:text-base">{user?.name || 'User'}</span>
-                </div>
+                <div className="flex items-center space-x-2 lg:space-x-4">
+                    {/* Notification Bell */}
+                    <NotificationBell user={user} token={token} />
+                  <div className="hidden sm:flex items-center">
+                    <img
+                      src={user?.profile_picture || '/placeholder-avatar.png'}
+                      alt="Profile"
+                      className="w-6 h-6 lg:w-8 lg:h-8 rounded-full mr-2"
+                      onError={(e) => e.target.src = '/placeholder-avatar.png'}
+                    />
+                    <span className="text-gray-700 text-sm lg:text-base">{user?.name || 'User'}</span>
+                  </div>
 
-                <button
-                  onClick={handleLogout}
-                  className="flex items-center px-2 lg:px-3 py-2 text-gray-700 hover:text-gray-900 transition-colors"
-                >
-                  <LogOut className="w-4 h-4 mr-1" />
-                  <span className="hidden sm:inline">Logout</span>
-                </button>
-              </div>
+                  <button
+                    onClick={handleLogout}
+                    className="flex items-center px-2 lg:px-3 py-2 text-gray-700 hover:text-gray-900 transition-colors"
+                  >
+                    <LogOut className="w-4 h-4 mr-1" />
+                    <span className="hidden sm:inline">Logout</span>
+                  </button>
+                </div>
             </div>
           </div>
         </header>
@@ -3088,23 +3471,23 @@ const UserDashboard = () => {
         </main>
       </div>
 
-      {/* Your existing modals stay the same */}
-      <ItemModal
-        isOpen={showModal || !!editingItem}
-        onClose={() => {
-          setShowModal(false);
-          setEditingItem(null);
-        }}
-        item={editingItem}
-        onSave={editingItem ? handleEditItem : handleAddItem}
-        locations={locations}
-        categories={categories}
-      />
-      
-      <TermsViewModal
-        isOpen={showTermsModal}
-        onClose={() => setShowTermsModal(false)}
-      />
+      {/* 📱 MODALS - Responsive */}
+        <ItemModal
+          isOpen={showModal || !!editingItem}
+          onClose={() => {
+            setShowModal(false);
+            setEditingItem(null);
+          }}
+          item={editingItem}
+          onSave={editingItem ? handleEditItem : handleAddItem}
+          locations={locations}
+          categories={categories}
+        />
+
+        <TermsViewModal
+          isOpen={showTermsModal}
+          onClose={() => setShowTermsModal(false)}
+        />
     </div>
   );
 };
@@ -3222,7 +3605,8 @@ const AdminDashboard = () => {
     }
   };
 
-// Add delete user function with safety checks
+
+//delete user function with safety checks
 const handleDeleteUser = async (googleId, userName) => {
   const confirmed = await showConfirm(
     '⚠️ Delete User', 
@@ -3438,14 +3822,10 @@ const handleDeleteUser = async (googleId, userName) => {
               {pendingItems.map(item => (
                 <div key={item.item_id || item.name} className="bg-white rounded-lg shadow-md overflow-hidden">
                   {/* Handle different image field names */}
-                  {(item.images || item.image_urls) && (item.images || item.image_urls).length > 0 && (
-                    <img 
-                      src={(item.images || item.image_urls)[0]} 
-                      alt={item.name} 
-                      className="w-full h-400 object-cover"
-                      onError={(e) => e.target.style.display = 'none'}
-                    />
-                  )}
+                  <ImageCarousel 
+                    images={item.images || item.image_urls || []} 
+                    alt={item.name}
+                  />
                   <div className="p-4">
                     <h3 className="text-lg font-semibold mb-2">{item.name}</h3>
                     <p className="text-gray-600 mb-2">Quantity: {item.quantity}</p>
@@ -3495,14 +3875,11 @@ const handleDeleteUser = async (googleId, userName) => {
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 {approvedItems.map(item => (
                   <div key={item.item_id || item.name} className="bg-white rounded-lg shadow-md overflow-hidden">
-                    {(item.images || item.image_urls) && (item.images || item.image_urls).length > 0 && (
-                      <img 
-                        src={(item.images || item.image_urls)[0]} 
-                        alt={item.name} 
-                        className="w-full h-400 object-cover"
-                        onError={(e) => e.target.style.display = 'none'}
-                      />
-                    )}
+
+                    <ImageCarousel 
+                      images={item.images || item.image_urls || []} 
+                      alt={item.name}
+                    />
                     <div className="p-4">
                       <h3 className="text-lg font-semibold mb-2">{item.name}</h3>
                       <p className="text-gray-600 mb-2">Quantity: {item.quantity}</p>
@@ -3532,14 +3909,10 @@ const handleDeleteUser = async (googleId, userName) => {
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 {rejectedItems.map(item => (
                   <div key={item.item_id || item.name} className="bg-white rounded-lg shadow-md overflow-hidden">
-                    {(item.images || item.image_urls) && (item.images || item.image_urls).length > 0 && (
-                      <img 
-                        src={(item.images || item.image_urls)[0]} 
-                        alt={item.name} 
-                        className="w-full h-400 object-cover"
-                        onError={(e) => e.target.style.display = 'none'}
-                      />
-                    )}
+                    <ImageCarousel 
+                      images={item.images || item.image_urls || []} 
+                      alt={item.name}
+                    />
                     <div className="p-4">
                       <h3 className="text-lg font-semibold mb-2">{item.name}</h3>
                       <p className="text-gray-600 mb-2">Quantity: {item.quantity}</p>
@@ -3678,10 +4051,6 @@ const handleDeleteUser = async (googleId, userName) => {
             )}
           </div>
         )}
-
-
-
-
         {activeTab === 'terms' && (
           <div className="space-y-4">
             <h2 className="text-xl font-semibold text-gray-800">Terms & Conditions Management</h2>

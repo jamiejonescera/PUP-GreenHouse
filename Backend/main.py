@@ -17,6 +17,9 @@ from botocore.config import Config
 import google.generativeai as genai
 import os
 import admin_auth
+import uuid
+from typing import List, Optional
+
 
 # Load environment variables
 load_dotenv()
@@ -152,6 +155,26 @@ class ResetPassword(BaseModel):
     token: str
     new_password: str
 
+
+class NotificationCreate(BaseModel):
+    user_id: str
+    title: str
+    message: str
+    type: str  # 'item_approved', 'item_rejected', 'item_claimed', 'new_message', etc.
+    related_item_id: Optional[str] = None
+    action_url: Optional[str] = None
+
+class NotificationResponse(BaseModel):
+    notification_id: str
+    user_id: str
+    title: str
+    message: str
+    type: str
+    related_item_id: Optional[str] = None
+    action_url: Optional[str] = None
+    is_read: bool
+    created_at: str
+
 # Initialize AWS clients with config
 try:
     dynamodb = boto3.resource('dynamodb', region_name=AWS_REGION, config=config)
@@ -159,7 +182,7 @@ try:
     table = dynamodb.Table(DYNAMODB_TABLE)
     print("✅ AWS clients initialized successfully")
     
-    # ✅ ADD THIS - Initialize admin manager AFTER table is created
+    # Initialize admin manager AFTER table is created
     try:
         from admin_auth import AdminAuthManager
         admin_manager = AdminAuthManager(table)
@@ -172,6 +195,21 @@ except Exception as e:
     print(f"❌ Error initializing AWS clients: {e}")
     admin_manager = None
 
+# Initialize Gemini AI model
+try:
+    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")  # Get from .env file
+    
+    if GEMINI_API_KEY:
+        genai.configure(api_key=GEMINI_API_KEY)
+        model = genai.GenerativeModel('gemini-pro')
+        print("✅ Gemini AI model initialized successfully")
+    else:
+        print("No AI detected")
+        model = None
+        
+except Exception as e:
+    print(f"❌ Error initializing Gemini AI: {e}")
+    model = None
 
 # Helper Functions
 def generate_token(user_id: str, is_admin: bool = False) -> str:
@@ -234,7 +272,32 @@ async def upload_to_s3(file: UploadFile, folder: str) -> str:
         # Return empty string instead of failing - item can still be created without image
         return ""
 
-
+async def create_notification(user_id: str, title: str, message: str, notification_type: str, 
+                            related_item_id: str = None, action_url: str = None):
+    """Create a new notification for a user"""
+    try:
+        notification_id = str(uuid.uuid4())
+        notification_data = {
+            "user_id": f"NOTIFICATION#{user_id}",
+            "item_id": f"NOTIF#{datetime.utcnow().isoformat()}#{notification_id}",
+            "notification_id": notification_id,
+            "target_user_id": user_id,
+            "title": title,
+            "message": message,
+            "type": notification_type,
+            "related_item_id": related_item_id,
+            "action_url": action_url,
+            "is_read": False,
+            "created_at": datetime.utcnow().isoformat()
+        }
+        
+        table.put_item(Item=notification_data)
+        print(f"✅ Notification created for user {user_id}: {title}")
+        return notification_id
+        
+    except Exception as e:
+        print(f"❌ Error creating notification: {e}")
+        return None
 
 
 
@@ -1314,10 +1377,57 @@ async def get_rejected_items(token_data: dict = Depends(admin_required)):
         print(f"❌ Error getting rejected items: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-
-
 @app.put("/admin/items/{item_id}/approve")
 async def approve_item(item_id: str, token_data: dict = Depends(admin_required)):
+    """Approve pending item (Admin only) - WITH NOTIFICATION"""
+    try:
+        print(f"✅ Admin approving item: {item_id}")
+        
+        # Find the item first
+        response = table.scan(
+            FilterExpression="begins_with(user_id, :item_prefix) AND item_id = :details",
+            ExpressionAttributeValues={
+                ":item_prefix": "ITEM#",
+                ":details": "DETAILS"
+            }
+        )
+        
+        item_found = None
+        for item in response.get("Items", []):
+            if (item.get("item_id_unique") == item_id or 
+                item.get("user_id", "").replace("ITEM#", "") == item_id):
+                item_found = item
+                break
+        
+        if not item_found:
+            raise HTTPException(status_code=404, detail="Item not found")
+        
+        # Update the item to approved
+        table.update_item(
+            Key={"user_id": item_found["user_id"], "item_id": "DETAILS"},
+            UpdateExpression="SET approved = :approved, approved_at = :timestamp",
+            ExpressionAttributeValues={
+                ":approved": True,
+                ":timestamp": datetime.utcnow().isoformat()
+            }
+        )
+        
+        # 🔔 CREATE NOTIFICATION
+        await create_notification(
+            user_id=item_found["owner_id"],
+            title="🎉 Item Approved!",
+            message=f'Your item "{item_found.get("name")}" has been approved and is now live!',
+            notification_type="item_approved",
+            related_item_id=item_id,
+            action_url=f"/dashboard"
+        )
+        
+        print(f"✅ Item approved and notification sent: {item_found.get('name')}")
+        return {"message": "Item approved successfully"}
+        
+    except Exception as e:
+        print(f"❌ Error approving item: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
     """Approve pending item (Admin only)"""
     try:
         print(f"✅ Admin approving item: {item_id}")
@@ -1378,7 +1488,7 @@ async def reject_item(
     request: dict,
     token_data: dict = Depends(admin_required)
 ):
-    """Reject an item (Admin only)"""
+    """Reject an item (Admin only) - WITH NOTIFICATION"""
     try:
         reason = request.get("reason", "")
         print(f"❌ Admin rejecting item: {item_id}, reason: {reason}")
@@ -1402,7 +1512,7 @@ async def reject_item(
         if not item_found:
             raise HTTPException(status_code=404, detail="Item not found")
         
-        # ✅ UPDATE WITH BOTH approved=False AND rejection_reason
+        # Update item as rejected
         table.update_item(
             Key={"user_id": item_found["user_id"], "item_id": "DETAILS"},
             UpdateExpression="SET approved = :approved, rejection_reason = :reason, rejected_at = :timestamp",
@@ -1413,7 +1523,17 @@ async def reject_item(
             }
         )
         
-        print(f"✅ Item rejected: {item_found.get('name')}")
+        # 🔔 CREATE NOTIFICATION
+        await create_notification(
+            user_id=item_found["owner_id"],
+            title="❌ Item Rejected",
+            message=f'Your item "{item_found.get("name")}" was rejected. Reason: {reason}',
+            notification_type="item_rejected",
+            related_item_id=item_id,
+            action_url=f"/dashboard"
+        )
+        
+        print(f"✅ Item rejected and notification sent: {item_found.get('name')}")
         return {"message": "Item rejected successfully"}
         
     except HTTPException:
@@ -1422,19 +1542,16 @@ async def reject_item(
         print(f"❌ Error rejecting item: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
+
 # Claims System
 @app.post("/items/{item_id}/claim")
 async def claim_item(item_id: str, token_data: dict = Depends(verify_token)):
-    """Claim an available item"""
+    """Claim an available item - WITH NOTIFICATION"""
     try:
         print(f"🎯 User {token_data['user_id']} attempting to claim item: {item_id}")
         
-        # Handle wrong item_id format from frontend
-        if item_id == "DETAILS":
-            print("❌ Invalid item_id: DETAILS")
-            raise HTTPException(status_code=400, detail="Invalid item ID")
-        
-        # Search for item by item_id_unique
+        # Find item
         response = table.scan(
             FilterExpression="begins_with(user_id, :item_prefix) AND item_id = :details",
             ExpressionAttributeValues={
@@ -1450,12 +1567,9 @@ async def claim_item(item_id: str, token_data: dict = Depends(verify_token)):
                 break
         
         if not item_found:
-            print(f"❌ Item not found: {item_id}")
             raise HTTPException(status_code=404, detail="Item not found")
         
-        print(f"✅ Found item: {item_found.get('name')} by {item_found.get('owner_name')}")
-        
-        # Check if item is claimable
+        # Validation checks...
         if not item_found.get("approved", False):
             raise HTTPException(status_code=400, detail="Item not approved")
         
@@ -1488,14 +1602,23 @@ async def claim_item(item_id: str, token_data: dict = Depends(verify_token)):
             }
         )
         
-        print(f"✅ Item claimed successfully by {claimant.get('name')}")
+        # 🔔 CREATE NOTIFICATION FOR ITEM OWNER
+        await create_notification(
+            user_id=item_found["owner_id"],
+            title="🎯 Someone Claimed Your Item!",
+            message=f'{claimant.get("name")} wants to claim your "{item_found.get("name")}". You can now chat with them!',
+            notification_type="item_claimed",
+            related_item_id=item_id,
+            action_url=f"/dashboard"
+        )
+        
+        print(f"✅ Item claimed and notification sent to owner")
         return {"message": "Item claimed successfully"}
         
     except Exception as e:
         print(f"❌ Error claiming item: {e}")
-        import traceback
-        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.get("/my-claims")
 async def get_my_claims(token_data: dict = Depends(verify_token)):
@@ -1546,11 +1669,11 @@ async def send_message(
     message: ChatMessage,
     token_data: dict = Depends(verify_token)
 ):
-    """Send chat message (only between owner and claimant)"""
+    """Send chat message - WITH NOTIFICATION"""
     try:
         print(f"💬 Sending message for item: {item_id}")
         
-        # Find item by item_id_unique
+        # Find item
         response = table.scan(
             FilterExpression="begins_with(user_id, :item_prefix) AND item_id = :details",
             ExpressionAttributeValues={
@@ -1568,7 +1691,7 @@ async def send_message(
         if not item_found:
             raise HTTPException(status_code=404, detail="Item not found")
         
-        # Check if user is owner or claimant
+        # Check authorization
         if token_data["user_id"] not in [item_found["owner_id"], item_found.get("claimed_by")]:
             raise HTTPException(status_code=403, detail="Not authorized to chat for this item")
         
@@ -1596,7 +1719,20 @@ async def send_message(
         
         table.put_item(Item=message_data)
         
-        print(f"✅ Message sent successfully")
+        # 🔔 NOTIFY THE OTHER PERSON (not the sender)
+        recipient_id = item_found.get("claimed_by") if token_data["user_id"] == item_found["owner_id"] else item_found["owner_id"]
+        
+        if recipient_id:
+            await create_notification(
+                user_id=recipient_id,
+                title="💬 New Message",
+                message=f'{sender.get("name")} sent you a message about "{item_found.get("name")}"',
+                notification_type="new_message",
+                related_item_id=item_id,
+                action_url=f"/dashboard"
+            )
+        
+        print(f"✅ Message sent and notification created")
         return {"message": "Message sent successfully", "message_id": message_id}
         
     except Exception as e:
@@ -2079,6 +2215,137 @@ async def verify_current_password(request: dict, token_data: dict = Depends(admi
         
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+
+@app.get("/notifications")
+async def get_user_notifications(token_data: dict = Depends(verify_token)):
+    """Get all notifications for the current user"""
+    try:
+        user_id = token_data["user_id"]
+        print(f"📬 Getting notifications for user: {user_id}")
+        
+        # Get notifications for this user
+        response = table.scan(
+            FilterExpression="begins_with(user_id, :notification_prefix) AND target_user_id = :user_id",
+            ExpressionAttributeValues={
+                ":notification_prefix": f"NOTIFICATION#{user_id}",
+                ":user_id": user_id
+            }
+        )
+        
+        notifications = []
+        for item in response.get("Items", []):
+            notification = {
+                "notification_id": item.get("notification_id"),
+                "user_id": item.get("target_user_id"),
+                "title": item.get("title"),
+                "message": item.get("message"),
+                "type": item.get("type"),
+                "related_item_id": item.get("related_item_id"),
+                "action_url": item.get("action_url"),
+                "is_read": item.get("is_read", False),
+                "created_at": item.get("created_at")
+            }
+            notifications.append(notification)
+        
+        # Sort by created_at (newest first)
+        notifications.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+        
+        print(f"📨 Found {len(notifications)} notifications")
+        return notifications
+        
+    except Exception as e:
+        print(f"❌ Error getting notifications: {e}")
+        return []
+    
+
+
+@app.put("/notifications/{notification_id}/read")
+async def mark_notification_read(notification_id: str, token_data: dict = Depends(verify_token)):
+    """Mark a notification as read"""
+    try:
+        user_id = token_data["user_id"]
+        print(f"👁️ Marking notification as read: {notification_id}")
+        
+        # Find the notification
+        response = table.scan(
+            FilterExpression="begins_with(user_id, :notification_prefix) AND notification_id = :notif_id",
+            ExpressionAttributeValues={
+                ":notification_prefix": f"NOTIFICATION#{user_id}",
+                ":notif_id": notification_id
+            }
+        )
+        
+        if response.get("Items"):
+            notification = response["Items"][0]
+            # Update to read
+            table.update_item(
+                Key={"user_id": notification["user_id"], "item_id": notification["item_id"]},
+                UpdateExpression="SET is_read = :read",
+                ExpressionAttributeValues={":read": True}
+            )
+            print(f"✅ Notification marked as read")
+            return {"message": "Notification marked as read"}
+        else:
+            raise HTTPException(status_code=404, detail="Notification not found")
+            
+    except Exception as e:
+        print(f"❌ Error marking notification as read: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.put("/notifications/mark-all-read")
+async def mark_all_notifications_read(token_data: dict = Depends(verify_token)):
+    """Mark all notifications as read for the current user"""
+    try:
+        user_id = token_data["user_id"]
+        print(f"👁️ Marking all notifications as read for user: {user_id}")
+        
+        # Get all unread notifications
+        response = table.scan(
+            FilterExpression="begins_with(user_id, :notification_prefix) AND is_read = :unread",
+            ExpressionAttributeValues={
+                ":notification_prefix": f"NOTIFICATION#{user_id}",
+                ":unread": False
+            }
+        )
+        
+        # Mark each as read
+        for notification in response.get("Items", []):
+            table.update_item(
+                Key={"user_id": notification["user_id"], "item_id": notification["item_id"]},
+                UpdateExpression="SET is_read = :read",
+                ExpressionAttributeValues={":read": True}
+            )
+        
+        count = len(response.get("Items", []))
+        print(f"✅ Marked {count} notifications as read")
+        return {"message": f"Marked {count} notifications as read"}
+        
+    except Exception as e:
+        print(f"❌ Error marking all notifications as read: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/notifications/unread-count")
+async def get_unread_notification_count(token_data: dict = Depends(verify_token)):
+    """Get count of unread notifications"""
+    try:
+        user_id = token_data["user_id"]
+        
+        response = table.scan(
+            FilterExpression="begins_with(user_id, :notification_prefix) AND is_read = :unread",
+            ExpressionAttributeValues={
+                ":notification_prefix": f"NOTIFICATION#{user_id}",
+                ":unread": False
+            },
+            Select="COUNT"
+        )
+        
+        count = response.get("Count", 0)
+        return {"unread_count": count}
+        
+    except Exception as e:
+        print(f"❌ Error getting unread count: {e}")
+        return {"unread_count": 0}
 
 
 @app.delete("/admin/users/{google_id}")

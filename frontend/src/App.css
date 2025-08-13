@@ -28,6 +28,30 @@
   color: #61dafb;
 }
 
+
+/* Image Carousel Styles */
+.image-carousel-container {
+  position: relative;
+}
+
+.image-carousel-thumbnails::-webkit-scrollbar {
+  height: 4px;
+}
+
+.image-carousel-thumbnails::-webkit-scrollbar-track {
+  background: #f1f1f1;
+  border-radius: 2px;
+}
+
+.image-carousel-thumbnails::-webkit-scrollbar-thumb {
+  background: #c1c1c1;
+  border-radius: 2px;
+}
+
+.image-carousel-thumbnails::-webkit-scrollbar-thumb:hover {
+  background: #a1a1a1;
+}
+
 @keyframes App-logo-spin {
   from {
     transform: rotate(0deg);

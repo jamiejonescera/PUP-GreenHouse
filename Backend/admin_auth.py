@@ -149,7 +149,7 @@ class AdminAuthManager:
             update_expression = "SET updated_at = :timestamp"
             expression_values = {":timestamp": datetime.utcnow().isoformat()}
             expression_names = {}  # Add this for reserved words
-            
+                
             if new_name and new_name.strip():
                 update_expression += ", #name = :name"
                 expression_values[":name"] = new_name.strip()
