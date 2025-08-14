@@ -197,11 +197,10 @@ except Exception as e:
 
 # Initialize Gemini AI model
 try:
-    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")  # Get from .env file
-    
+    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")    
     if GEMINI_API_KEY:
         genai.configure(api_key=GEMINI_API_KEY)
-        model = genai.GenerativeModel('gemini-pro')
+        model = genai.GenerativeModel('gemini-1.5-flash')
         print("✅ Gemini AI model initialized successfully")
     else:
         print("No AI detected")
@@ -2090,14 +2089,11 @@ Make the suggestions practical and versatile for:
 Group similar materials together and suggest combination projects when possible.
 Be specific about which items from the list to use for each suggestion.
 
-
 Format your response cleanly with numbered suggestions (1, 2, 3...) without asterisks or special formatting.
-Group similar materials together and suggest combination projects when possible.
-Be specific about which items from the list to use for each suggestion.
-
 Use simple, clean formatting - no asterisks, no bold markers, just clear numbered lists."""
         
-        response = model.generate_content(
+        # Make sure you're using the correct model name here
+        ai_response = model.generate_content(
             prompt,
             generation_config={
                 'max_output_tokens': 2000,
@@ -2106,14 +2102,14 @@ Use simple, clean formatting - no asterisks, no bold markers, just clear numbere
         )
         
         # Clean up the formatting
-        ai_text = response.text
+        ai_text = ai_response.text
         ai_text = ai_text.replace('**', '')   # Remove double asterisks
         ai_text = ai_text.replace('***', '')  # Remove triple asterisks
         ai_text = ai_text.replace('*', '')    # Remove single asterisks
         
         return {
             "success": True,
-            "recommendations": ai_text,  # Use cleaned text instead of response.text
+            "recommendations": ai_text,
             "available_items_count": len(current_items),
             "suggestions_count": suggestions_count
         }
@@ -2121,7 +2117,6 @@ Use simple, clean formatting - no asterisks, no bold markers, just clear numbere
     except Exception as e:
         print(f"❌ AI error: {e}")
         return {"success": False, "error": str(e)}
-
 
 # Debug endpoints
 @app.get("/debug/admin-items")
