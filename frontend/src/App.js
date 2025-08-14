@@ -3738,7 +3738,7 @@ const handleDeleteUser = async (googleId, userName) => {
     }
   };
   const handleLogout = () => {
-    logout(); // ✅ Just call logout - your custom modal will handle confirmation
+    logout(); 
   };
 
    
