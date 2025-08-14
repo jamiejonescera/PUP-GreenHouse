@@ -1,7 +1,6 @@
 import React, { useState, useEffect, createContext, useContext } from 'react';
-import { Plus, Search, User, LogOut, MapPin, Clock, MessageSquare, Check, X, Edit, Trash2, Shield, Menu, Users, Settings } from 'lucide-react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate } from 'react-router-dom';
-
+import { Plus, Search, User, LogOut, MapPin, Clock, MessageSquare, Check, X, Edit, Trash2, Shield, Menu, Users, Settings, Eye, EyeOff } from 'lucide-react';
 // Auth Context
 const AuthContext = createContext();
 
@@ -724,7 +723,7 @@ const GoogleLoginButton = ({ onSuccess, onError }) => {
 
 
 
-// User Login Component (Google OAuth only)
+// User Login Component
 const UserLogin = () => {
   const { login } = useAuth();
   const [error, setError] = useState('');
@@ -734,7 +733,7 @@ const UserLogin = () => {
     try {
       console.log('Google login success:', userData);
       login(userData, token, false);
-      navigate('/dashboard'); // Redirect to user dashboard
+      navigate('/dashboard');
     } catch (error) {
       console.error('Google login error:', error);
       setError('Google login failed: ' + error.message);
@@ -742,70 +741,87 @@ const UserLogin = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-green-50 to-blue-50 flex items-center justify-center p-4">
-      <div className="max-w-md w-full bg-white rounded-lg shadow-lg p-8">
-        {/* User Header */}
-        <div className="text-center mb-8">
-          <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
-            <svg className="w-8 h-8 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.746 0 3.332.477 4.5 1.253v13C19.832 18.477 18.246 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
-            </svg>
-          </div>
-          <h1 className="text-3xl font-bold text-green-800 mb-2">Project GreenHouse</h1>
-          <p className="text-gray-600">Sustainable Exchange Platform for PUP Community</p>
-          <p className="text-sm text-green-600 font-medium mt-2">Student & Faculty Portal</p>
-        </div>
-
-        {/* Error Display */}
-        {error && (
-          <div className="mb-6 p-4 bg-red-50 border border-red-200 text-red-700 rounded-lg">
-            <div className="flex items-center">
-              <svg className="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 20 20">
-                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
-              </svg>
-              {error}
+    <div 
+      className="min-h-screen bg-cover bg-center bg-no-repeat flex items-center justify-end p-4"
+      style={{ backgroundImage: 'url(/GH-login-bg.jpg)' }}
+    >
+      {/* Glass Container - Right Side */}
+      <div className="w-full max-w-md mr-4 md:mr-8 lg:mr-16">
+        <div className="bg-gray-50/95 backdrop-blur-sm border border-gray-200/50 rounded-2xl shadow-2xl p-10 mt-20 mb-20">
+          {/* Logo and Header */}
+          <div className="text-center mb-8">
+            <div className="flex justify-center mb-6">
+              <img 
+                src="/GH-Logo.png" 
+                className="w-20 h-25" 
+                alt="Project GreenHouse Logo" 
+                onError={(e) => {
+                  e.target.style.display = 'none';
+                  e.target.nextSibling.style.display = 'flex';
+                }}
+              />
+              {/* Fallback if logo doesn't load */}
             </div>
-          </div>
-        )}
+            
+            <h1 className="text-base text-gray-800 mb-2">
+              Polytechnic University of the Philippines
+            </h1>
+            <h2 className="text-4xl font-bold text-green-700 mb-2">
+              Project GreenHouse
+            </h2>
+            <p className="text-gray-700 text-base mb-2">
+              Sustainable Exchange Platform
+            </p>
+         </div>
 
-        {/* Google Login */}
-        <div className="space-y-6">
-          <div className="text-center">
-            <p className="text-gray-600 mb-4">Sign in with your Google account</p>
-          </div>
+          {/* Error Display */}
+          {error && (
+            <div className="mb-6 p-4 bg-red-100 border border-red-200 text-red-700 rounded-lg">
+              <div className="flex items-center">
+                <svg className="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                </svg>
+                <span className="text-2xl">{error}</span>
+              </div>
+            </div>
+          )}
+
+          {/* Google Login Section */}
+          <div className="space-y-6">
+            <div className="text-center">
+              <p className="text-gray-600 text-lg mb-4">
+                Be part of sustaining our environment and build a greener PUP community
+              </p>
+            </div>
 
             <div className="flex justify-center">
-              <GoogleLoginButton 
-                onSuccess={handleGoogleLogin}
-                onError={setError}
-              />
+              <div className="bg-white rounded-lg p-4 shadow-md border text-lg">
+                <GoogleLoginButton 
+                  onSuccess={handleGoogleLogin}
+                  onError={setError}
+                />
+              </div>
             </div>
-          {/* Features List */}
-          <div className="mt-6 p-4 bg-gray-50 rounded-lg">
-            <h3 className="text-sm font-semibold text-gray-700 mb-2">What you can do:</h3>
-            <ul className="text-xs text-gray-600 space-y-1">
-              <li>• Share items with the PUP community</li>
-              <li>• Claim items from other students</li>
-              <li>• Chat with item owners</li>
-              <li>• Help reduce waste on campus</li>
-            </ul>
-          </div>
-        </div>
 
-        {/* Clean footer - NO admin links */}
-        <div className="mt-8 pt-6 border-t border-gray-200 text-center">
-          <p className="text-xs text-gray-300">© 2025 Project GreenHouse</p>
+            {/* Features List */}
+            <div class="text-gray-600 text-base text-center">
+              <p class="mb-1">Contribute recyclable items</p>
+              <p>within the PUP community</p>
+            </div>
+          </div>
+
+          {/* Footer */}
+          <div className="mt-10 pt-6 border-t border-gray-200 text-center">
+            <p className="text-xs text-gray-500">© 2025 Project GreenHouse - PUP Sustainability Initiative</p>
+          </div>
         </div>
       </div>
     </div>
   );
 };
 
-// Secret Admin Login Component
-// Add these new components to your App.js file
 
-// 1. REPLACE your existing AdminLogin component with this enhanced version:
-
+// Admin Login Component 
 const AdminLogin = () => {
   const { login } = useAuth();
   const [adminCredentials, setAdminCredentials] = useState({ email: '', password: '' });
@@ -813,6 +829,7 @@ const AdminLogin = () => {
   const [loading, setLoading] = useState(false);
   const [showSetup, setShowSetup] = useState(false);
   const [checkingSetup, setCheckingSetup] = useState(true);
+  const [showPassword, setShowPassword] = useState(false); // Password toggle state
   const navigate = useNavigate();
 
   // Check if admin setup is needed
@@ -827,7 +844,7 @@ const AdminLogin = () => {
       setShowSetup(result.first_time_setup);
     } catch (error) {
       console.error('Error checking admin setup:', error);
-      setShowSetup(true); // Assume setup needed if error
+      setShowSetup(true);
     } finally {
       setCheckingSetup(false);
     }
@@ -870,7 +887,10 @@ const AdminLogin = () => {
 
   if (checkingSetup) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-gray-900 to-gray-700 flex items-center justify-center">
+      <div 
+        className="min-h-screen bg-cover bg-center bg-no-repeat flex items-center justify-center"
+        style={{ backgroundImage: 'url(/GH-login-bg.jpg)' }}
+      >
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-white"></div>
       </div>
     );
@@ -881,99 +901,121 @@ const AdminLogin = () => {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-900 to-gray-700 flex items-center justify-center p-4">
-      <div className="max-w-md w-full bg-white rounded-lg shadow-xl p-8">
-        {/* Admin Header */}
-        <div className="text-center mb-8">
-          <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
-            <Shield className="w-8 h-8 text-red-600" />
-          </div>
-          <h1 className="text-2xl font-bold text-gray-800 mb-2">Project GreenHouse</h1>
-          <p className="text-gray-600">Admin Portal</p>
-          <div className="mt-2 px-3 py-1 bg-red-100 text-red-800 text-xs font-medium rounded-full inline-block">
-            Polytechnic University of the Philippines
-          </div>
-        </div>
-
-        {/* Error Display */}
-        {error && (
-          <div className="mb-6 p-4 bg-red-50 border border-red-200 text-red-700 rounded-lg">
-            <div className="flex items-center">
-              <svg className="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 20 20">
-                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
-              </svg>
-              {error}
+    <div 
+      className="min-h-screen bg-cover bg-center bg-no-repeat flex items-center justify-end p-4"
+      style={{ backgroundImage: 'url(/GH-login-bg.jpg)' }}
+    >
+      {/* Glass Container - Right Side */}
+      <div className="w-full max-w-md mr-4 md:mr-8 lg:mr-16">
+        <div className="bg-gray-50/95 backdrop-blur-sm border border-gray-200/50 rounded-2xl shadow-2xl p-10 mt-2 mb-2">
+          {/* Admin Header */}
+          <div className="text-center mb-4">
+            <div className="flex justify-center mb-3">
+              <img 
+                src="/GH-Logo.png" 
+                className="w-20 h-20" 
+                alt="Project GreenHouse Logo" 
+                onError={(e) => e.target.style.display = 'none'}
+              />
+            </div>
+            <h1 className="text-2xl font-bold text-gray-800 mb-2">Project GreenHouse</h1>
+            <p className="text-gray-700">Polytechnic University of the Philippines</p>
+            <div className="mt-3 px-4 py-2 bg-red-100 border border-red-200 text-red-700 text-sm font-medium rounded-full inline-block">
+            Admin Portal
             </div>
           </div>
-        )}
 
-        {/* Admin Login Form */}
-        <form onSubmit={handleAdminLogin} className="space-y-6">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Email Address
-            </label>
-            <input
-              type="email"
-              value={adminCredentials.email}
-              onChange={(e) => setAdminCredentials({...adminCredentials, email: e.target.value})}
-              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-red-500 transition-colors"
-              required
-              disabled={loading}
-              placeholder="Enter admin email"
-            />
-          </div>
+          {/* Error Display */}
+          {error && (
+            <div className="mb-6 p-4 bg-red-100 border border-red-200 text-red-700 rounded-lg">
+              <div className="flex items-center">
+                <svg className="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                </svg>
+                <span className="text-sm">{error}</span>
+              </div>
+            </div>
+          )}
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Password
-            </label>
-            <input
-              type="password"
-              value={adminCredentials.password}
-              onChange={(e) => setAdminCredentials({...adminCredentials, password: e.target.value})}
-              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-red-500 transition-colors"
-              required
-              disabled={loading}
-              placeholder="Enter admin password"
-            />
-          </div>
+          {/* Admin Login Form */}
+          <form onSubmit={handleAdminLogin} className="space-y-6">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Email Address
+              </label>
+              <input
+                type="email"
+                value={adminCredentials.email}
+                onChange={(e) => setAdminCredentials({...adminCredentials, email: e.target.value})}
+                className="w-full px-4 py-3 bg-white border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-red-500 transition-all text-gray-900 placeholder-gray-500"
+                required
+                disabled={loading}
+                placeholder="Enter admin email"
+              />
+            </div>
 
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full bg-red-600 text-white py-3 px-4 rounded-lg hover:bg-red-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-medium"
-          >
-            {loading ? (
-              <span className="flex items-center justify-center">
-                <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2"></div>
-                Signing in...
-              </span>
-            ) : (
-              <span className="flex items-center justify-center">
-                <Shield className="w-5 h-5 mr-2" />
-                Admin Login
-              </span>
-            )}
-          </button>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Password
+              </label>
+              <div className="relative">
+                <input
+                  type={showPassword ? "text" : "password"}
+                  value={adminCredentials.password}
+                  onChange={(e) => setAdminCredentials({...adminCredentials, password: e.target.value})}
+                  className="w-full px-4 py-3 pr-12 bg-white border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-red-500 transition-all text-gray-900 placeholder-gray-500"
+                  required
+                  disabled={loading}
+                  placeholder="Enter admin password"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute inset-y-0 right-0 flex items-center pr-3 text-gray-500 hover:text-gray-700 transition-colors"
+                  disabled={loading}
+                >
+                  {showPassword ? (
+                    <EyeOff className="w-5 h-5" />
+                  ) : (
+                    <Eye className="w-5 h-5" />
+                  )}
+                </button>
+              </div>
+            </div>
 
-          {/* Forgot Password Link */}
-          <div className="text-center">
             <button
-              type="button"
-              onClick={() => navigate('/admin-forgot-password')}
-              className="text-red-600 hover:text-red-800 text-sm transition-colors"
+              type="submit"
+              disabled={loading}
+              className="w-full bg-red-600 hover:bg-red-700 text-white py-3 px-4 rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed font-medium border border-red-500"
             >
-              Forgot your password?
+              {loading ? (
+                <span className="flex items-center justify-center">
+                  <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2"></div>
+                  Signing in...
+                </span>
+              ) : (
+                <span className="flex items-center justify-center">
+                  Login
+                </span>
+              )}
             </button>
-          </div>
-        </form>
+
+            {/* Forgot Password Link */}
+            <div className="text-center">
+              <button
+                type="button"
+                onClick={() => navigate('/admin-forgot-password')}
+                className="text-red-600 hover:text-red-800 text-sm transition-colors"
+              >
+                Forgot your password?
+              </button>
+            </div>
+          </form>
+        </div>
       </div>
     </div>
   );
 };
-
-// 2. ADD this new AdminSetup component:
 
 const AdminSetup = ({ onSetupComplete }) => {
   const [setupData, setSetupData] = useState({
