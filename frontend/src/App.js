@@ -346,11 +346,7 @@ const AuthProvider = ({ children }) => {
 
 const useAuth = () => useContext(AuthContext);
 
-const API_BASE = process.env.REACT_APP_API_URL || (
-  process.env.NODE_ENV === 'development' 
-    ? 'http://localhost:8000'
-    : 'https://grcal5qmrihig54qfyc37tzyxe0knzdz.lambda-url.ap-northeast-1.on.aws'
-);
+const API_BASE = process.env.REACT_APP_API_URL || 'http://localhost:8000';
 
 console.log('🔍 Current API_BASE:', API_BASE); // Debug line
 console.log('🌍 Environment:', process.env.NODE_ENV); // Debug line

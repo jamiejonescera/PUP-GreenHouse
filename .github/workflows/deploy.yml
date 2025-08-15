@@ -1,35 +1,33 @@
-name: Auto Deploy Frontend
+name: Deploy to AWS Lambda
 
 on:
   push:
     branches: [ main ]
 
 jobs:
-  deploy-frontend:
+  deploy:
     runs-on: ubuntu-latest
     
     steps:
-    - uses: actions/checkout@v3
-    
-    - name: Setup Node.js
-      uses: actions/setup-node@v3
-      with:
-        node-version: '18'
-    
-    - name: Install and build frontend
-      run: |
-        cd frontend
-        npm install
-        npm run build
-    
+    - name: Checkout code
+      uses: actions/checkout@v3
+      
     - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v1
+      uses: aws-actions/configure-aws-credentials@v2
       with:
         aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         aws-region: ap-northeast-1
-    
-    - name: Deploy to S3
+        
+    - name: Login to Amazon ECR
+      uses: aws-actions/amazon-ecr-login@v1
+      
+    - name: Build and push Docker image
       run: |
-        cd frontend
-        aws s3 sync build/ s3://pup-greenhouse-frontend --delete
+        docker build -t greenhouse-api .
+        docker tag greenhouse-api:latest 876497563387.dkr.ecr.ap-northeast-1.amazonaws.com/greenhouse-api:latest
+        docker push 876497563387.dkr.ecr.ap-northeast-1.amazonaws.com/greenhouse-api:latest
+        
+    - name: Update Lambda function
+      run: |
+        aws lambda update-function-code --function-name greenhouse-api --image-uri 876497563387.dkr.ecr.ap-northeast-1.amazonaws.com/greenhouse-api:latest
