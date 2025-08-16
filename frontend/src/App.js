@@ -1844,7 +1844,6 @@ const ProtectedRoute = ({ children, adminOnly = false }) => {
   return children;
 };
 
-
 const ItemCard = ({ item, onClaim, onEdit, onDelete, currentUser, onChatToggle, showChat, chatMessages, onSendMessage, newMessage, setNewMessage }) => {
   const [showClaimModal, setShowClaimModal] = useState(false);
   
@@ -1889,6 +1888,14 @@ const ItemCard = ({ item, onClaim, onEdit, onDelete, currentUser, onChatToggle, 
             'bg-gray-100 text-gray-800'
           }`}>
             {item.status}
+          </span>
+        </div>
+        
+        
+        <div className="flex items-center mb-3 pb-2 border-b border-gray-100">
+          <User className="w-4 h-4 text-gray-500 mr-2" />
+          <span className="text-sm text-gray-600">
+            Posted by: <span className="font-medium text-gray-800">{item.owner_name || 'Unknown User'}</span>
           </span>
         </div>
         
