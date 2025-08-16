@@ -2984,14 +2984,9 @@ const UserDashboard = () => {
   
     // Get notification icon
     const getNotificationIcon = (type) => {
-      switch (type) {
-        case 'item_approved': return '🎉';
-        case 'item_rejected': return '❌';
-        case 'item_claimed': return '🎯';
-        case 'new_message': return '💬';
-        default: return '🔔';
-      }
+      return '🔔';
     };
+    
   
     return (
       <div className="relative">
