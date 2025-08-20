@@ -5,8 +5,7 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart  
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
-import boto3
-from botocore.exceptions import ClientError
+import asyncpg
 import os
 from dotenv import load_dotenv
 
@@ -20,8 +19,9 @@ SMTP_USERNAME = os.getenv("SMTP_USERNAME")
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD") 
 
 class AdminAuthManager:
-    def __init__(self, dynamodb_table):
-        self.table = dynamodb_table
+    def __init__(self, db_pool):
+        """Initialize with PostgreSQL connection pool instead of DynamoDB table"""
+        self.db_pool = db_pool
         
     def hash_password(self, password: str) -> str:
         """Hash password with salt"""
@@ -37,46 +37,47 @@ class AdminAuthManager:
         except:
             return False
     
-    def check_first_time_setup(self) -> bool:
+    async def check_first_time_setup(self) -> bool:
         """Check if admin setup is needed (no admin exists)"""
         try:
-            response = self.table.get_item(
-                Key={"user_id": "ADMIN", "item_id": "PROFILE"}
-            )
-            return "Item" not in response
+            if not self.db_pool:
+                return True
+                
+            async with self.db_pool.acquire() as conn:
+                result = await conn.fetchval("SELECT COUNT(*) FROM admin_accounts")
+                return result == 0
         except Exception as e:
             print(f"Error checking first-time setup: {e}")
             return True  # Assume first time if error
     
-    def create_admin(self, name: str, email: str, password: str) -> Dict[str, Any]:
+    async def create_admin(self, name: str, email: str, password: str) -> Dict[str, Any]:
         """Create the first admin account"""
         try:
             # Check if admin already exists
-            if not self.check_first_time_setup():
+            if not await self.check_first_time_setup():
                 return {"success": False, "error": "Admin already exists"}
+            
+            if not self.db_pool:
+                return {"success": False, "error": "Database not connected"}
             
             # Hash password
             password_hash = self.hash_password(password)
+            admin_id = str(secrets.token_hex(16))  # Generate unique admin ID
             
             # Create admin record
-            admin_data = {
-                "user_id": "ADMIN",
-                "item_id": "PROFILE",
-                "name": name,
-                "email": email,
-                "password_hash": password_hash,
-                "is_admin": True,
-                "created_at": datetime.utcnow().isoformat(),
-                "last_login": None,
-                "reset_token": None,
-                "reset_expires": None
-            }
-            
-            self.table.put_item(Item=admin_data)
+            async with self.db_pool.acquire() as conn:
+                await conn.execute("""
+                    INSERT INTO admin_accounts (
+                        user_id, name, email, password_hash, created_at, 
+                        last_login, reset_token, reset_expires
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                """, admin_id, name, email.lower(), password_hash, 
+                   datetime.utcnow(), None, None, None)
             
             return {
                 "success": True,
                 "message": "Admin account created successfully",
+                "admin_id": admin_id,
                 "admin": {
                     "name": name,
                     "email": email
@@ -87,37 +88,37 @@ class AdminAuthManager:
             print(f"Error creating admin: {e}")
             return {"success": False, "error": str(e)}
     
-    def authenticate_admin(self, email: str, password: str) -> Dict[str, Any]:
+    async def authenticate_admin(self, email: str, password: str) -> Dict[str, Any]:
         """Authenticate admin login"""
         try:
+            if not self.db_pool:
+                return {"success": False, "error": "Database not connected"}
+                
             # Get admin record
-            response = self.table.get_item(
-                Key={"user_id": "ADMIN", "item_id": "PROFILE"}
-            )
+            async with self.db_pool.acquire() as conn:
+                admin = await conn.fetchrow(
+                    "SELECT * FROM admin_accounts WHERE email = $1", 
+                    email.lower()
+                )
             
-            if "Item" not in response:
-                return {"success": False, "error": "Admin not found"}
-            
-            admin = response["Item"]
-            
-            # Check email and password
-            if admin.get("email") != email:
+            if not admin:
                 return {"success": False, "error": "Invalid credentials"}
             
+            # Check password
             if not self.verify_password(password, admin.get("password_hash", "")):
                 return {"success": False, "error": "Invalid credentials"}
             
             # Update last login
-            self.table.update_item(
-                Key={"user_id": "ADMIN", "item_id": "PROFILE"},
-                UpdateExpression="SET last_login = :timestamp",
-                ExpressionAttributeValues={":timestamp": datetime.utcnow().isoformat()}
-            )
+            async with self.db_pool.acquire() as conn:
+                await conn.execute(
+                    "UPDATE admin_accounts SET last_login = $1 WHERE user_id = $2",
+                    datetime.utcnow(), admin["user_id"]
+                )
             
             return {
                 "success": True,
                 "admin": {
-                    "user_id": "ADMIN",
+                    "user_id": admin["user_id"],
                     "name": admin.get("name"),
                     "email": admin.get("email"),
                     "is_admin": True
@@ -128,57 +129,59 @@ class AdminAuthManager:
             print(f"Error authenticating admin: {e}")
             return {"success": False, "error": str(e)}
     
-    def update_admin_profile(self, current_email: str, new_name: str = None, new_email: str = None, new_password: str = None) -> Dict[str, Any]:
+    async def update_admin_profile(self, current_email: str, new_name: str = None, new_email: str = None, new_password: str = None) -> Dict[str, Any]:
         """Update admin profile"""
         try:
+            if not self.db_pool:
+                return {"success": False, "error": "Database not connected"}
+                
             # Get current admin
-            response = self.table.get_item(
-                Key={"user_id": "ADMIN", "item_id": "PROFILE"}
-            )
+            async with self.db_pool.acquire() as conn:
+                admin = await conn.fetchrow(
+                    "SELECT * FROM admin_accounts WHERE email = $1", 
+                    current_email.lower()
+                )
             
-            if "Item" not in response:
+            if not admin:
                 return {"success": False, "error": "Admin not found"}
             
-            admin = response["Item"]
+            # Prepare update fields
+            update_fields = ["updated_at = $1"]
+            values = [datetime.utcnow()]
+            param_count = 1
             
-            # Verify current email
-            if admin.get("email") != current_email:
-                return {"success": False, "error": "Current email doesn't match"}
-            
-            # Prepare update - FIXED VERSION
-            update_expression = "SET updated_at = :timestamp"
-            expression_values = {":timestamp": datetime.utcnow().isoformat()}
-            expression_names = {}  # Add this for reserved words
-                
             if new_name and new_name.strip():
-                update_expression += ", #name = :name"
-                expression_values[":name"] = new_name.strip()
-                expression_names["#name"] = "name"  # 'name' is reserved in DynamoDB
+                param_count += 1
+                update_fields.append(f"name = ${param_count}")
+                values.append(new_name.strip())
             
             if new_email and new_email.strip():
-                update_expression += ", email = :email"
-                expression_values[":email"] = new_email.strip()
+                param_count += 1
+                update_fields.append(f"email = ${param_count}")
+                values.append(new_email.strip().lower())
             
             if new_password and new_password.strip():
                 password_hash = self.hash_password(new_password)
-                update_expression += ", password_hash = :password_hash"
-                expression_values[":password_hash"] = password_hash
+                param_count += 1
+                update_fields.append(f"password_hash = ${param_count}")
+                values.append(password_hash)
             
-            print(f"🔄 Updating admin profile: {update_expression}")
-            print(f"📝 Values: {expression_values}")
+            # Add WHERE clause parameter
+            param_count += 1
+            values.append(admin["user_id"])
             
-            # Update admin record - FIXED
-            update_params = {
-                "Key": {"user_id": "ADMIN", "item_id": "PROFILE"},
-                "UpdateExpression": update_expression,
-                "ExpressionAttributeValues": expression_values
-            }
+            update_query = f"""
+                UPDATE admin_accounts 
+                SET {', '.join(update_fields)}
+                WHERE user_id = ${param_count}
+            """
             
-            # Only add ExpressionAttributeNames if we have reserved words
-            if expression_names:
-                update_params["ExpressionAttributeNames"] = expression_names
+            print(f"🔄 Updating admin profile with query: {update_query}")
+            print(f"📝 Values count: {len(values)}")
             
-            self.table.update_item(**update_params)
+            # Execute update
+            async with self.db_pool.acquire() as conn:
+                await conn.execute(update_query, *values)
             
             return {
                 "success": True,
@@ -195,23 +198,27 @@ class AdminAuthManager:
             traceback.print_exc()
             return {"success": False, "error": str(e)}
     
-    def generate_reset_token(self, email: str) -> Dict[str, Any]:
+    async def generate_reset_token(self, email: str) -> Dict[str, Any]:
         """Generate password reset token - SECURE VERSION"""
         try:
+            if not self.db_pool:
+                return {"success": False, "error": "Database not connected"}
+                
             # Get admin record first
-            response = self.table.get_item(
-                Key={"user_id": "ADMIN", "item_id": "PROFILE"}
-            )
+            async with self.db_pool.acquire() as conn:
+                admin = await conn.fetchrow(
+                    "SELECT * FROM admin_accounts WHERE email = $1", 
+                    email.lower()
+                )
             
-            if "Item" not in response:
+            if not admin:
                 print(f"❌ Admin account not found in database")
                 return {"success": False, "error": "Admin not found"}
             
-            admin = response["Item"]
             admin_email = admin.get("email")
             
             # SECURITY CHECK: Only allow reset for the actual admin email
-            if admin_email != email:
+            if admin_email != email.lower():
                 print(f"🚨 Security blocked: Attempted reset for '{email}' but admin email is '{admin_email}'")
                 # Return generic error message to prevent email enumeration
                 return {"success": False, "error": "Email must match admin email for reset"}
@@ -220,17 +227,15 @@ class AdminAuthManager:
             
             # Generate reset token
             reset_token = secrets.token_urlsafe(32)
-            reset_expires = (datetime.utcnow() + timedelta(hours=1)).isoformat()
+            reset_expires = datetime.utcnow() + timedelta(hours=1)
             
             # Save reset token
-            self.table.update_item(
-                Key={"user_id": "ADMIN", "item_id": "PROFILE"},
-                UpdateExpression="SET reset_token = :token, reset_expires = :expires",
-                ExpressionAttributeValues={
-                    ":token": reset_token,
-                    ":expires": reset_expires
-                }
-            )
+            async with self.db_pool.acquire() as conn:
+                await conn.execute("""
+                    UPDATE admin_accounts 
+                    SET reset_token = $1, reset_expires = $2 
+                    WHERE user_id = $3
+                """, reset_token, reset_expires, admin["user_id"])
             
             return {
                 "success": True,
@@ -242,41 +247,37 @@ class AdminAuthManager:
             print(f"Error generating reset token: {e}")
             return {"success": False, "error": "An error occurred. Please try again."}
     
-    def reset_password(self, token: str, new_password: str) -> Dict[str, Any]:
+    async def reset_password(self, token: str, new_password: str) -> Dict[str, Any]:
         """Reset password with token"""
         try:
-            # Get admin record
-            response = self.table.get_item(
-                Key={"user_id": "ADMIN", "item_id": "PROFILE"}
-            )
+            if not self.db_pool:
+                return {"success": False, "error": "Database not connected"}
+                
+            # Get admin record by reset token
+            async with self.db_pool.acquire() as conn:
+                admin = await conn.fetchrow(
+                    "SELECT * FROM admin_accounts WHERE reset_token = $1", 
+                    token
+                )
             
-            if "Item" not in response:
-                return {"success": False, "error": "Admin not found"}
-            
-            admin = response["Item"]
-            
-            # Check token
-            if admin.get("reset_token") != token:
+            if not admin:
                 return {"success": False, "error": "Invalid reset token"}
             
             # Check expiration
             reset_expires = admin.get("reset_expires")
-            if not reset_expires or datetime.fromisoformat(reset_expires) < datetime.utcnow():
+            if not reset_expires or reset_expires < datetime.utcnow():
                 return {"success": False, "error": "Reset token expired"}
             
             # Hash new password
             password_hash = self.hash_password(new_password)
             
             # Update password and clear reset token
-            self.table.update_item(
-                Key={"user_id": "ADMIN", "item_id": "PROFILE"},
-                UpdateExpression="SET password_hash = :password, reset_token = :null, reset_expires = :null, updated_at = :timestamp",
-                ExpressionAttributeValues={
-                    ":password": password_hash,
-                    ":null": None,
-                    ":timestamp": datetime.utcnow().isoformat()
-                }
-            )
+            async with self.db_pool.acquire() as conn:
+                await conn.execute("""
+                    UPDATE admin_accounts 
+                    SET password_hash = $1, reset_token = NULL, reset_expires = NULL, updated_at = $2
+                    WHERE user_id = $3
+                """, password_hash, datetime.utcnow(), admin["user_id"])
             
             return {
                 "success": True,
@@ -363,3 +364,9 @@ Reset expires: {(datetime.utcnow() + timedelta(hours=1)).strftime('%Y-%m-%d %I:%
         except Exception as e:
             print(f"❌ Error sending email: {e}")
             return False
+
+
+# COMPATIBILITY: For existing imports in main.py
+class LocalAdminAuthManager(AdminAuthManager):
+    """Alias for backward compatibility"""
+    pass
