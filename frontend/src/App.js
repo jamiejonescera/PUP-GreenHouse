@@ -348,7 +348,7 @@ const useAuth = () => useContext(AuthContext);
 
 // Replace localhost with your Render URL
 const API_BASE = process.env.NODE_ENV === 'production' 
-  ? 'https://pup-greenhouse-backend.onrender.com'
+  ? 'https://pup-greenhouse.onrender.com'
   : 'http://localhost:8000';
 
 console.log('🔍 Current API_BASE:', API_BASE); // Debug line
