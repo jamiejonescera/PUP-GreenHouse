@@ -1,65 +1,63 @@
 from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Form, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, EmailStr
 from typing import Optional, List, Dict, Any
-import asyncpg
+import boto3
 import json
 import uuid
 from datetime import datetime, timedelta
 import base64
-import aiofiles
+from botocore.exceptions import ClientError
 import hashlib
 from dotenv import load_dotenv
+from mangum import Mangum
 import jwt
+from botocore.config import Config
 import google.generativeai as genai
 import os
+import admin_auth
 import uuid
-from pathlib import Path
-import psycopg2
-from psycopg2.extras import RealDictCursor
+from typing import List, Optional
+
 
 # Load environment variables
 load_dotenv()
 
+
 # Initialize FastAPI app
 app = FastAPI(title="Eco Pantry API", version="1.0.0")
-
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:3000",  # Local development
-        "https://thegreenhouse-project.netlify.app",  # Your Netlify frontend
-        "https://your-frontend-name.netlify.app",  # If different URL
-        "https://pup-greenhouse-backend.onrender.com"  # Your Render backend URL
+        "http://localhost:3000",
+        "https://thegreenhouse-project.netlify.app"
     ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# AWS Configuration - FIXED
+AWS_REGION = "ap-northeast-1"
+DYNAMODB_TABLE = "aws-fb-db-dynamo"
+S3_BUCKET = "aws-fb-db-s3"
 
-# # === PostgreSQL Configuration (NO AWS) ===
-# DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://greenhouse_user:greenhouse_password@localhost:5432/greenhouse_db")
-# UPLOAD_DIR = Path("uploads")
-# UPLOAD_DIR.mkdir(exist_ok=True)
-# UPLOAD_BASE_URL = "http://localhost:8000/uploads"
 
-# # Serve uploaded files statically
-# app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
-SECRET_KEY = os.getenv("SECRET_KEY", "fallback-secret-key-for-development")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-if not GEMINI_API_KEY:
-    print("⚠️ GEMINI_API_KEY not found - AI features will be disabled")
+# Correct config without use_ssl
+config = Config(
+    signature_version='v4',
+    retries={'max_attempts': 3},
+    region_name=AWS_REGION
+)
 
 # Security
 security = HTTPBearer()
-SECRET_KEY = os.getenv("SECRET_KEY", "eco-pantry-local-secret-key-2024")
+SECRET_KEY = "your-secret-key-here"  # Change this in production
 
 # Google OAuth Config
-GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "740603627895-39r4nspre969ll50ehr4ele2isnn24du.apps.googleusercontent.com")
+GOOGLE_CLIENT_ID = "740603627895-39r4nspre969ll50ehr4ele2isnn24du.apps.googleusercontent.com"
 
 # Pydantic Models
 class UserCreate(BaseModel):
@@ -134,6 +132,7 @@ class LocationCreate(BaseModel):
     description: str
     is_active: bool = True
 
+
 class AdminSetup(BaseModel):
     name: str
     email: EmailStr
@@ -156,6 +155,7 @@ class ResetPassword(BaseModel):
     token: str
     new_password: str
 
+
 class NotificationCreate(BaseModel):
     user_id: str
     title: str
@@ -175,215 +175,27 @@ class NotificationResponse(BaseModel):
     is_read: bool
     created_at: str
 
-# === PostgreSQL Database initialization (NO AWS) ===
-db_pool = None
-admin_manager = None
-
-class LocalAdminAuthManager:
-    def __init__(self, db_pool):
-        self.db_pool = db_pool
-        self.smtp_username = os.getenv("SMTP_USERNAME")
-        self.smtp_password = os.getenv("SMTP_PASSWORD")
-        
-    def hash_password(self, password: str) -> str:
-        return hashlib.sha256(password.encode()).hexdigest()
+# Initialize AWS clients with config
+try:
+    dynamodb = boto3.resource('dynamodb', region_name=AWS_REGION, config=config)
+    s3_client = boto3.client('s3', region_name=AWS_REGION, config=config)
+    table = dynamodb.Table(DYNAMODB_TABLE)
+    print("✅ AWS clients initialized successfully")
     
-    async def check_first_time_setup(self) -> bool:
-        try:
-            if self.db_pool:
-                async with self.db_pool.acquire() as conn:
-                    result = await conn.fetchval("SELECT COUNT(*) FROM admin_accounts")
-                    return result == 0
-            return True
-        except Exception as e:
-            print(f"Error checking first time setup: {e}")
-            return True
-    
-    async def create_admin(self, name: str, email: str, password: str):
-        try:
-            if not await self.check_first_time_setup():
-                return {"success": False, "error": "Admin already exists"}
-            
-            password_hash = self.hash_password(password)
-            admin_id = str(uuid.uuid4())
-            
-            if self.db_pool:
-                async with self.db_pool.acquire() as conn:
-                    await conn.execute("""
-                        INSERT INTO admin_accounts (user_id, name, email, password_hash, created_at)
-                        VALUES ($1, $2, $3, $4, $5)
-                    """, admin_id, name, email.lower(), password_hash, datetime.utcnow())
-            
-            return {"success": True, "message": "Admin account created successfully", "admin_id": admin_id}
-            
-        except Exception as e:
-            return {"success": False, "error": str(e)}
-    
-    async def authenticate_admin(self, email: str, password: str):
-        try:
-            if self.db_pool:
-                async with self.db_pool.acquire() as conn:
-                    admin = await conn.fetchrow("SELECT * FROM admin_accounts WHERE email = $1", email.lower())
-                    
-                    if not admin or not self.hash_password(password) == admin["password_hash"]:
-                        return {"success": False, "error": "Invalid credentials"}
-                    
-                    await conn.execute("UPDATE admin_accounts SET last_login = $1 WHERE user_id = $2", datetime.utcnow(), admin["user_id"])
-                    
-                    return {
-                        "success": True,
-                        "admin": {
-                            "user_id": admin["user_id"],
-                            "name": admin["name"],
-                            "email": admin["email"],
-                            "is_admin": True
-                        }
-                    }
-            return {"success": False, "error": "Invalid credentials"}
-        except Exception as e:
-            return {"success": False, "error": "Authentication failed"}
-
-async def init_db():
-    global db_pool, admin_manager
+    # Initialize admin manager AFTER table is created
     try:
-        print("🔌 Connecting to PostgreSQL...")
-        db_pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=10)
-        print("✅ Database connection pool created")
-        await create_tables()
-        admin_manager = LocalAdminAuthManager(db_pool)
-        print("✅ Admin manager initialized")
-    except Exception as e:
-        print(f"❌ Database initialization error: {e}")
+        from admin_auth import AdminAuthManager
+        admin_manager = AdminAuthManager(table)
+        print("✅ Admin manager initialized successfully")
+    except ImportError:
+        print("⚠️ admin_auth.py not found - admin features will not work")
+        admin_manager = None
+    
+except Exception as e:
+    print(f"❌ Error initializing AWS clients: {e}")
+    admin_manager = None
 
-async def create_tables():
-    if not db_pool:
-        return
-    async with db_pool.acquire() as conn:
-        print("📋 Creating database tables...")
-        
-        # Users table
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS users (
-                user_id VARCHAR(255) PRIMARY KEY,
-                google_id VARCHAR(255) UNIQUE,
-                email VARCHAR(255) UNIQUE NOT NULL,
-                name VARCHAR(255) NOT NULL,
-                profile_picture TEXT,
-                is_admin BOOLEAN DEFAULT FALSE,
-                is_active BOOLEAN DEFAULT TRUE,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                last_login TIMESTAMP
-            );
-        """)
-        
-        # Admin accounts table
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS admin_accounts (
-                user_id VARCHAR(255) PRIMARY KEY,
-                name VARCHAR(255) NOT NULL,
-                email VARCHAR(255) UNIQUE NOT NULL,
-                password_hash VARCHAR(255) NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                last_login TIMESTAMP
-            );
-        """)
-        
-        # Items table
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS items (
-                item_id VARCHAR(255) PRIMARY KEY,
-                name VARCHAR(255) NOT NULL,
-                quantity INTEGER NOT NULL,
-                category VARCHAR(255) NOT NULL,
-                location VARCHAR(255) NOT NULL,
-                owner_id VARCHAR(255) NOT NULL,
-                owner_name VARCHAR(255),
-                owner_email VARCHAR(255),
-                expiry_date TIMESTAMP,
-                duration_days INTEGER DEFAULT 7,
-                comments TEXT,
-                contact_info TEXT,
-                image_urls TEXT[],
-                status VARCHAR(50) DEFAULT 'available',
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                approved BOOLEAN DEFAULT FALSE,
-                claimed_by VARCHAR(255),
-                claimant_email VARCHAR(255),
-                claim_expires_at TIMESTAMP,
-                rejection_reason TEXT,
-                rejected_at TIMESTAMP,
-                approved_at TIMESTAMP
-            );
-        """)
-        
-        # Locations table
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS locations (
-                location_id VARCHAR(255) PRIMARY KEY,
-                name VARCHAR(255) NOT NULL,
-                address TEXT NOT NULL,
-                description TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                is_active BOOLEAN DEFAULT TRUE
-            );
-        """)
-        
-        # Chat messages table
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS chat_messages (
-                message_id VARCHAR(255) PRIMARY KEY,
-                sender_id VARCHAR(255) NOT NULL,
-                receiver_id VARCHAR(255) NOT NULL,
-                message TEXT NOT NULL,
-                item_id VARCHAR(255),
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                read_at TIMESTAMP
-            );
-        """)
-        
-        # Notifications table
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS notifications (
-                notification_id VARCHAR(255) PRIMARY KEY,
-                user_id VARCHAR(255) NOT NULL,
-                title VARCHAR(255) NOT NULL,
-                message TEXT NOT NULL,
-                type VARCHAR(50) DEFAULT 'info',
-                read BOOLEAN DEFAULT FALSE,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-        """)
-        
-        # Settings table
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS settings (
-                setting_key VARCHAR(255) PRIMARY KEY,
-                setting_value TEXT,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-        """)
-        
-        print("✅ Database tables created successfully!")
-from contextlib import asynccontextmanager
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # Startup
-    print("🚀 Starting Eco Pantry Backend...")
-    await init_db()
-    yield
-    # Shutdown
-    if db_pool:
-        await db_pool.close()
-
-# Update your FastAPI app initialization (around line 27)
-app = FastAPI(
-    title="Eco Pantry API", 
-    version="1.0.0",
-    lifespan=lifespan  # ← Add this line
-)
-
-# Initialize Gemini AI model (NO AWS DEPENDENCIES)
+# Initialize Gemini AI model
 try:
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")    
     if GEMINI_API_KEY:
@@ -398,7 +210,7 @@ except Exception as e:
     print(f"❌ Error initializing Gemini AI: {e}")
     model = None
 
-# Helper Functions (NO AWS)
+# Helper Functions
 def generate_token(user_id: str, is_admin: bool = False) -> str:
     payload = {
         "user_id": user_id,
@@ -421,68 +233,780 @@ def admin_required(token_data: dict = Depends(verify_token)):
         raise HTTPException(status_code=403, detail="Admin access required")
     return token_data
 
-# LOCAL FILE UPLOAD (NO S3)
-async def upload_to_local(file: UploadFile, folder: str) -> str:
-    """Upload file to local storage instead of S3"""
+async def upload_to_s3(file: UploadFile, folder: str) -> str:
+    """Upload file to S3 bucket"""
     try:
         if not file.filename:
             raise ValueError("No filename provided")
             
-        print(f"📸 Starting local upload: {file.filename}")
+        print(f"📸 Starting S3 upload: {file.filename}")
         
-        # Create folder if it doesn't exist
-        folder_path = UPLOAD_DIR / folder
-        folder_path.mkdir(exist_ok=True)
+        # Generate unique filename
+        file_extension = file.filename.split('.')[-1] if '.' in file.filename else ''
+        unique_filename = f"{folder}/{uuid.uuid4()}.{file_extension}"
         
-        # Validate file
-        content = await file.read()
-        if len(content) == 0:
-            raise ValueError("Empty file")
+        # Read file content
+        file_content = await file.read()
+        print(f"📄 File size: {len(file_content)} bytes")
         
-        if len(content) > 5 * 1024 * 1024:  # 5MB limit
-            raise ValueError(f"File too large: {len(content)} bytes")
+        # Upload to S3
+        s3_client.put_object(
+            Bucket=S3_BUCKET,
+            Key=unique_filename,
+            Body=file_content,
+            ContentType=file.content_type or 'image/jpeg'
+        )
         
-        # Generate unique filename with proper extension
-        file_extension = file.filename.split('.')[-1].lower() if '.' in file.filename else 'jpg'
-        if file_extension not in ['jpg', 'jpeg', 'png', 'gif']:
-            file_extension = 'jpg'  # Default to jpg
-            
-        unique_filename = f"{uuid.uuid4()}.{file_extension}"
-        file_path = folder_path / unique_filename
-        
-        # Save file
-        async with aiofiles.open(file_path, 'wb') as f:
-            await f.write(content)
-        
-        # Generate URL
-        url = f"{UPLOAD_BASE_URL}/{folder}/{unique_filename}"
-        print(f"✅ Local upload successful: {url}")
+        # Generate public URL
+        url = f"https://{S3_BUCKET}.s3.{AWS_REGION}.amazonaws.com/{unique_filename}"
+        print(f"✅ S3 upload successful: {url}")
         
         return url
         
     except Exception as e:
-        print(f"❌ Local upload error: {str(e)}")
-        raise
+        print(f"❌ S3 upload error: {str(e)}")
+        print(f"❌ Error type: {type(e).__name__}")
+        import traceback
+        traceback.print_exc()
+        # Return empty string instead of failing - item can still be created without image
+        return ""
 
 async def create_notification(user_id: str, title: str, message: str, notification_type: str, 
                             related_item_id: str = None, action_url: str = None):
-    """Create a new notification for a user using PostgreSQL"""
+    """Create a new notification for a user"""
     try:
         notification_id = str(uuid.uuid4())
+        notification_data = {
+            "user_id": f"NOTIFICATION#{user_id}",
+            "item_id": f"NOTIF#{datetime.utcnow().isoformat()}#{notification_id}",
+            "notification_id": notification_id,
+            "target_user_id": user_id,
+            "title": title,
+            "message": message,
+            "type": notification_type,
+            "related_item_id": related_item_id,
+            "action_url": action_url,
+            "is_read": False,
+            "created_at": datetime.utcnow().isoformat()
+        }
         
-        if db_pool:
-            async with db_pool.acquire() as conn:
-                await conn.execute("""
-                    INSERT INTO notifications (notification_id, user_id, title, message, type, related_item_id, action_url, created_at)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                """, notification_id, user_id, title, message, notification_type, related_item_id, action_url, datetime.utcnow())
-        
+        table.put_item(Item=notification_data)
         print(f"✅ Notification created for user {user_id}: {title}")
         return notification_id
         
     except Exception as e:
         print(f"❌ Error creating notification: {e}")
         return None
+
+
+
+# Authentication Endpoints
+@app.post("/auth/login")
+async def login(user_data: UserCreate):
+    """Login or register user with Google OAuth"""
+    try:
+        print(f"🔍 Login attempt with data: {user_data.email}")
+        
+        # Check if user exists (using your table structure: user_id/item_id)
+        print(f"🔍 Checking for existing user with google_id: {user_data.google_id}")
+        response = table.get_item(Key={"user_id": user_data.google_id, "item_id": "PROFILE"})
+        
+        if "Item" in response:
+            print(f"✅ Found existing user")
+            user = response["Item"]
+            if not user.get("is_active", True):
+                raise HTTPException(status_code=403, detail="Account suspended")
+            
+            # Update last login
+            table.update_item(
+                Key={"user_id": user_data.google_id, "item_id": "PROFILE"},
+                UpdateExpression="SET last_login = :timestamp",
+                ExpressionAttributeValues={":timestamp": datetime.utcnow().isoformat()}
+            )
+        else:
+            print(f"❌ User not found, creating new user...")
+            # Create new user (using your table structure: user_id/item_id)
+            user = {
+                "user_id": user_data.google_id,      # Partition key
+                "item_id": "PROFILE",                # Sort key
+                "google_id": user_data.google_id,
+                "email": user_data.email,
+                "name": user_data.name,
+                "profile_picture": user_data.profile_picture,
+                "is_admin": False,
+                "is_active": True,
+                "created_at": datetime.utcnow().isoformat(),
+                "last_login": datetime.utcnow().isoformat()
+            }
+            
+            print(f"💾 Saving new user: {user_data.name}")
+            put_response = table.put_item(Item=user)
+            print(f"✅ User saved successfully!")
+        
+        # Generate token using google_id as user_id
+        token = generate_token(user_data.google_id, user.get("is_admin", False))
+        print(f"🔑 Generated token for user: {user_data.name}")
+        
+        return {
+            "access_token": token,  # Frontend expects this field name
+            "user": {
+                "user_id": user_data.google_id,
+                "email": user["email"],
+                "name": user["name"],
+                "profile_picture": user.get("profile_picture"),
+                "is_admin": user.get("is_admin", False),
+                "is_active": user.get("is_active", True)
+            }
+        }
+        
+    except Exception as e:
+        print(f"❌ Login error: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+
+
+
+@app.get("/admin/setup/check")
+async def check_admin_setup():
+    """Check if admin setup is needed"""
+    try:
+        is_first_time = admin_manager.check_first_time_setup()
+        return {
+            "first_time_setup": is_first_time,
+            "message": "Admin setup required" if is_first_time else "Admin already exists"
+        }
+    except Exception as e:
+        print(f"Error checking admin setup: {e}")
+        return {"first_time_setup": True, "error": str(e)}
+
+@app.post("/admin/setup")
+async def setup_admin(admin_data: AdminSetup):
+    """Create the first admin account"""
+    try:
+        print(f"🔧 Setting up admin account: {admin_data.email}")
+        
+        # Validate password strength
+        if len(admin_data.password) < 8:
+            return {"success": False, "error": "Password must be at least 8 characters"}
+        
+        if not any(c.isupper() for c in admin_data.password):
+            return {"success": False, "error": "Password must contain at least one uppercase letter"}
+        
+        if not any(c.islower() for c in admin_data.password):
+            return {"success": False, "error": "Password must contain at least one lowercase letter"}
+        
+        if not any(c.isdigit() for c in admin_data.password):
+            return {"success": False, "error": "Password must contain at least one number"}
+        
+        # Create admin
+        result = admin_manager.create_admin(
+            name=admin_data.name,
+            email=admin_data.email,
+            password=admin_data.password
+        )
+        
+        if result["success"]:
+            print(f"✅ Admin created: {admin_data.name}")
+            return result
+        else:
+            print(f"❌ Admin creation failed: {result['error']}")
+            return result
+            
+    except Exception as e:
+        print(f"❌ Error in admin setup: {e}")
+        return {"success": False, "error": str(e)}
+
+@app.post("/admin/login")
+async def admin_login_new(login_data: AdminLogin):
+    """New admin login with email/password"""
+    try:
+        print(f"🔐 Admin login attempt: {login_data.email}")
+        
+        # Authenticate admin
+        result = admin_manager.authenticate_admin(login_data.email, login_data.password)
+        
+        if result["success"]:
+            # Generate JWT token
+            admin_data = result["admin"]
+            token = generate_token(admin_data["user_id"], is_admin=True)
+            
+            print(f"✅ Admin login successful: {admin_data['name']}")
+            return {
+                "access_token": token,
+                "user": admin_data
+            }
+        else:
+            print(f"❌ Admin login failed: {result['error']}")
+            raise HTTPException(status_code=401, detail=result["error"])
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ Error in admin login: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/admin/profile")
+async def get_admin_profile(token_data: dict = Depends(admin_required)):
+    """Get current admin profile"""
+    try:
+        response = table.get_item(
+            Key={"user_id": "ADMIN", "item_id": "PROFILE"}
+        )
+        
+        if "Item" not in response:
+            raise HTTPException(status_code=404, detail="Admin profile not found")
+        
+        admin = response["Item"]
+        return {
+            "name": admin.get("name"),
+            "email": admin.get("email"),
+            "created_at": admin.get("created_at"),
+            "last_login": admin.get("last_login")
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.put("/admin/profile")
+async def update_admin_profile(
+    profile_data: AdminProfileUpdate,
+    token_data: dict = Depends(admin_required)
+):
+    """Update admin profile"""
+    try:
+        print(f"📝 Admin updating profile: {profile_data.current_email}")
+        
+        # Validate new password if provided
+        if profile_data.new_password:
+            if len(profile_data.new_password) < 8:
+                return {"success": False, "error": "Password must be at least 8 characters"}
+        
+        # Update profile
+        result = admin_manager.update_admin_profile(
+            current_email=profile_data.current_email,
+            new_name=profile_data.new_name,
+            new_email=profile_data.new_email,
+            new_password=profile_data.new_password
+        )
+        
+        if result["success"]:
+            print(f"✅ Admin profile updated successfully")
+            return result
+        else:
+            print(f"❌ Profile update failed: {result['error']}")
+            return result
+            
+    except Exception as e:
+        print(f"❌ Error updating admin profile: {e}")
+        return {"success": False, "error": str(e)}
+
+@app.post("/admin/forgot-password")
+async def admin_forgot_password(request: dict):
+    """Secure admin password reset request"""
+    try:
+        email = request.get("email", "").strip().lower()
+        
+        if not email:
+            return {"success": False, "error": "Email is required"}
+        
+        print(f"📧 Password reset requested for: {email}")
+        
+        # Generate reset token (includes security check)
+        result = admin_manager.generate_reset_token(email)
+        
+        if not result["success"]:
+            print(f"❌ Reset token generation failed: {result['error']}")
+            # IMPORTANT: Return the actual error to frontend for blocked emails
+            return {
+                "success": False, 
+                "error": result["error"]  # This will show the security block message
+            }
+        
+        # Send email only if token generation succeeded
+        reset_token = result["reset_token"]
+        admin_name = result["admin_name"]
+        
+        email_sent = admin_manager.send_reset_email(email, reset_token, admin_name)
+        
+        if email_sent:
+            print(f"✅ Reset email sent to: {email}")
+            return {
+                "success": True,
+                "message": "Password reset email sent successfully"
+            }
+        else:
+            print(f"❌ Failed to send reset email to: {email}")
+            return {
+                "success": False,
+                "error": "Failed to send email. Please try again later."
+            }
+            
+    except Exception as e:
+        print(f"❌ Error in forgot password: {e}")
+        return {
+            "success": False,
+            "error": "An error occurred. Please try again."
+        }
+
+@app.post("/admin/reset-password")
+async def admin_reset_password(reset_data: ResetPassword):
+    """Reset admin password with token"""
+    try:
+        print(f"🔑 Password reset attempt with token")
+        
+        # Validate new password
+        if len(reset_data.new_password) < 8:
+            return {"success": False, "error": "Password must be at least 8 characters"}
+        
+        # Reset password
+        result = admin_manager.reset_password(reset_data.token, reset_data.new_password)
+        
+        if result["success"]:
+            print(f"✅ Password reset successful")
+            return result
+        else:
+            print(f"❌ Password reset failed: {result['error']}")
+            return result
+            
+    except Exception as e:
+        print(f"❌ Error resetting password: {e}")
+        return {"success": False, "error": str(e)}
+
+@app.post("/auth/admin/login")
+async def admin_login_legacy(username: str = Form(), password: str = Form()):
+    """Legacy admin login - redirects to new system"""
+    try:
+        print(f"🔄 Legacy admin login attempt: {username}")
+        
+        # Check if this is the old hardcoded admin
+        if username == "admin" and password == "1admin@123!":
+            # Check if new admin system is set up
+            is_first_time = admin_manager.check_first_time_setup()
+            
+            if is_first_time:
+                # Allow legacy login but indicate setup needed
+                admin_id = "admin-user-001"
+                token = generate_token(admin_id, is_admin=True)
+                
+                return {
+                    "access_token": token,
+                    "user": {
+                        "user_id": admin_id,
+                        "name": "Administrator",
+                        "email": "admin@ecopantry.com",
+                        "is_admin": True,
+                        "setup_required": True  # Flag for frontend
+                    }
+                }
+            else:
+                # New system is set up, redirect to new login
+                raise HTTPException(
+                    status_code=410,
+                    detail="Please use the new admin login system"
+                )
+        
+        # Try new login system
+        try:
+            result = admin_manager.authenticate_admin(username, password)
+            if result["success"]:
+                admin_data = result["admin"]
+                token = generate_token(admin_data["user_id"], is_admin=True)
+                
+                return {
+                    "access_token": token,
+                    "user": admin_data
+                }
+        except:
+            pass
+        
+        # Invalid credentials
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ Legacy admin login error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# User Management Endpoints
+@app.get("/users")
+async def get_users(token_data: dict = Depends(admin_required)):
+    """Get all users (Admin only) - FIXED VERSION"""
+    try:
+        print("🔍 Admin getting users...")
+        
+        # Scan for user profiles with correct structure
+        response = table.scan(
+            FilterExpression="item_id = :profile AND attribute_exists(email)",
+            ExpressionAttributeValues={
+                ":profile": "PROFILE"
+            }
+        )
+        
+        users = []
+        for item in response.get("Items", []):
+            user_data = {
+                "user_id": item.get("user_id"),
+                "google_id": item.get("user_id"),  # Same as user_id in your structure
+                "name": item.get("name"),
+                "email": item.get("email"),
+                "profile_picture": item.get("profile_picture"),
+                "is_active": item.get("is_active", True),
+                "created_at": item.get("created_at"),
+                "last_login": item.get("last_login")
+            }
+            users.append(user_data)
+            print(f"✅ Added user: {item.get('name')}")
+        
+        print(f"🎯 Returning {len(users)} users to admin")
+        return users
+        
+    except Exception as e:
+        print(f"❌ Error getting users: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+    """Get all users (Admin only) - DEBUG VERSION"""
+    try:
+        print("🔍 Admin getting users...")
+        
+        # First, let's see ALL items that might be users
+        response = table.scan()
+        
+        print(f"📊 Total items in database: {len(response.get('Items', []))}")
+        
+        all_users = []
+        user_like_items = []
+        
+        for item in response.get("Items", []):
+            user_id = item.get("user_id", "")
+            item_id = item.get("item_id", "")
+            
+            # Look for anything that might be a user
+            if "USER#" in user_id or "email" in item or "google_id" in item:
+                user_like_items.append({
+                    "user_id": user_id,
+                    "item_id": item_id,
+                    "name": item.get("name"),
+                    "email": item.get("email"),
+                    "google_id": item.get("google_id")
+                })
+                print(f"🔍 Found user-like item: user_id={user_id}, item_id={item_id}, name={item.get('name')}, email={item.get('email')}")
+        
+        print(f"📋 Found {len(user_like_items)} user-like items")
+        
+        # Now try to build proper user list
+        seen_emails = set()
+        
+        for item in user_like_items:
+            email = item.get("email")
+            if email and email not in seen_emails:
+                seen_emails.add(email)
+                
+                user_data = {
+                    "user_id": item.get("user_id"),
+                    "google_id": item.get("google_id"),
+                    "name": item.get("name"),
+                    "email": email,
+                    "profile_picture": item.get("profile_picture"),
+                    "is_active": item.get("is_active", True),
+                    "created_at": item.get("created_at"),
+                    "last_login": item.get("last_login")
+                }
+                
+                all_users.append(user_data)
+                print(f"✅ Added user: {item.get('name')} ({email})")
+        
+        print(f"🎯 Returning {len(all_users)} users to admin")
+        return all_users
+        
+    except Exception as e:
+        print(f"❌ Error getting users: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    
+    
+@app.put("/users/{google_id}/status")
+async def update_user_status(
+    google_id: str, 
+    is_active: bool,
+    token_data: dict = Depends(admin_required)
+):
+    """Suspend/activate user account (Admin only)"""
+    try:
+        print(f"🔄 Updating user status: {google_id} -> {is_active}")
+        
+        # Update using the actual structure (no USER# prefix)
+        table.update_item(
+            Key={"user_id": google_id, "item_id": "PROFILE"},
+            UpdateExpression="SET is_active = :status",
+            ExpressionAttributeValues={":status": is_active}
+        )
+        
+        print(f"✅ User status updated successfully")
+        return {"message": "User status updated successfully"}
+        
+    except Exception as e:
+        print(f"❌ Error updating user status: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+def generate_signed_url(key: str, expiration: int = 3600):
+    return s3_client.generate_presigned_url(
+        'get_object',
+        Params={'Bucket': S3_BUCKET, 'Key': key},
+        ExpiresIn=expiration
+    )
+# Item Management Endpoints
+@app.post("/items")
+async def create_item(
+    name: str = Form(...),
+    quantity: int = Form(...),
+    category: str = Form(...),
+    location: str = Form(...),
+    expiry_date: str = Form(...),  # ✅ NOW REQUIRED
+    duration_days: int = Form(7),
+    comments: str = Form(...),     # ✅ NOW REQUIRED
+    contact_info: str = Form(...), # ✅ NOW REQUIRED
+    images: List[UploadFile] = File(...),  # ✅ NOW REQUIRED
+    token_data: dict = Depends(verify_token)
+):
+    """Create new item for donation - ALL FIELDS REQUIRED"""
+    try:
+        print(f"🔍 Creating item for user: {token_data.get('user_id', 'Unknown')}")
+        print(f"📝 Item data: name={name}, quantity={quantity}, category={category}, location={location}")
+        
+        # ✅ VALIDATE REQUIRED FIELDS
+        validation_errors = []
+        
+        # Name validation
+        if not name or not name.strip():
+            validation_errors.append("Item name is required and cannot be empty")
+        elif len(name.strip()) < 2:
+            validation_errors.append("Item name must be at least 2 characters")
+        elif len(name.strip()) > 100:
+            validation_errors.append("Item name cannot exceed 100 characters")
+            
+        # Category validation
+        if not category or not category.strip():
+            validation_errors.append("Category is required")
+            
+        # Location validation
+        if not location or not location.strip():
+            validation_errors.append("Location is required")
+            
+        # Expiry date validation
+        if not expiry_date or not expiry_date.strip():
+            validation_errors.append("Expiry date is required")
+        else:
+            try:
+                # Validate date format and ensure it's not in the past
+                expiry_datetime = datetime.fromisoformat(expiry_date.replace('Z', '+00:00'))
+                if expiry_datetime.date() < datetime.utcnow().date():
+                    validation_errors.append("Expiry date cannot be in the past")
+            except ValueError:
+                validation_errors.append("Invalid expiry date format")
+            
+        # Comments validation
+        if not comments or not comments.strip():
+            validation_errors.append("Description/comments are required")
+        elif len(comments.strip()) < 10:
+            validation_errors.append("Description must be at least 10 characters")
+        elif len(comments.strip()) > 500:
+            validation_errors.append("Description cannot exceed 500 characters")
+            
+        # Contact info validation
+        if not contact_info or not contact_info.strip():
+            validation_errors.append("Contact information is required")
+        elif len(contact_info.strip()) > 100:
+            validation_errors.append("Contact information cannot exceed 100 characters")
+            
+        # Quantity validation
+        if quantity < 1:
+            validation_errors.append("Quantity must be at least 1")
+        elif quantity > 999:
+            validation_errors.append("Quantity cannot exceed 999")
+            
+        # Images validation - MANDATORY
+        if not images or len(images) == 0:
+            validation_errors.append("At least one image is required")
+        else:
+            # Validate each image
+            for i, image in enumerate(images):
+                if not image.filename:
+                    validation_errors.append(f"Image {i+1} is invalid or empty")
+                    continue
+                    
+                # Check file size (5MB limit)
+                if hasattr(image, 'size') and image.size > 5 * 1024 * 1024:
+                    validation_errors.append(f"Image {i+1} exceeds 5MB size limit")
+                    
+                # Check file type
+                allowed_types = {'image/jpeg', 'image/jpg', 'image/png', 'image/gif'}
+                if image.content_type not in allowed_types:
+                    validation_errors.append(f"Image {i+1} must be JPEG, PNG, or GIF format")
+        
+        # If validation errors, return them
+        if validation_errors:
+            print(f"❌ Validation errors: {validation_errors}")
+            raise HTTPException(
+                status_code=400, 
+                detail={
+                    "message": "Validation failed",
+                    "errors": validation_errors
+                }
+            )
+        
+        # Get user info
+        user_response = table.get_item(
+            Key={"user_id": token_data["user_id"], "item_id": "PROFILE"}
+        )
+        
+        if "Item" not in user_response:
+            print(f"❌ User not found: {token_data['user_id']}")
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        user = user_response["Item"]
+        print(f"✅ Found user: {user.get('name', 'Unknown')}")
+        
+        # ✅ UPLOAD IMAGES TO S3 (MANDATORY)
+        image_urls = []
+        print(f"📸 Uploading {len(images)} images...")
+        
+        for i, image in enumerate(images):
+            try:
+                print(f"📸 Uploading image {i+1}/{len(images)}: {image.filename}")
+                url = await upload_to_s3(image, "items")  # Use "items" folder
+                if url:
+                    image_urls.append(url)
+                    print(f"✅ Image {i+1} uploaded: {url}")
+                else:
+                    print(f"❌ Failed to upload image {i+1}: {image.filename}")
+                    raise HTTPException(
+                        status_code=500, 
+                        detail=f"Failed to upload image: {image.filename}"
+                    )
+            except Exception as e:
+                print(f"❌ Error uploading image {i+1}: {e}")
+                raise HTTPException(
+                    status_code=500, 
+                    detail=f"Failed to upload image {image.filename}: {str(e)}"
+                )
+        
+        # Ensure at least one image was uploaded successfully
+        if not image_urls:
+            print("❌ No images uploaded successfully")
+            raise HTTPException(status_code=500, detail="Failed to upload any images")
+        
+        # Create item
+        item_id = str(uuid.uuid4())
+        
+        # Clean and prepare data
+        item_data = {
+            "user_id": f"ITEM#{item_id}",
+            "item_id": "DETAILS",
+            "item_id_unique": item_id,
+            "name": name.strip(),
+            "quantity": quantity,
+            "category": category.strip(),
+            "location": location.strip(),
+            "owner_id": token_data["user_id"],
+            "owner_name": user.get("name", "Unknown"),
+            "owner_email": user.get("email", ""),
+            "expiry_date": expiry_date,  # Use provided expiry date
+            "duration_days": duration_days,
+            "comments": comments.strip(),
+            "contact_info": contact_info.strip(),
+            "image_urls": image_urls,
+            "images": image_urls,  # Compatibility field
+            "status": "available",
+            "created_at": datetime.utcnow().isoformat(),
+            "approved": False,  # Requires admin approval
+            "claimed_by": None,
+            "claimant_email": None,
+            "claim_expires_at": None
+        }
+        
+        print(f"💾 Saving item: {item_data['name']}")
+        table.put_item(Item=item_data)
+        print(f"✅ Item saved successfully: {item_id}")
+        
+        return {
+            "success": True,
+            "message": "Item created successfully",
+            "item_id": item_id,
+            "item": {
+                "item_id": item_id,
+                "name": item_data["name"],
+                "quantity": item_data["quantity"],
+                "category": item_data["category"],
+                "location": item_data["location"],
+                "status": item_data["status"],
+                "image_count": len(image_urls),
+                "created_at": item_data["created_at"]
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ Error creating item: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to create item: {str(e)}")
+
+# ✅ ALSO UPDATE YOUR UPLOAD_TO_S3 FUNCTION FOR BETTER ERROR HANDLING
+async def upload_to_s3(file: UploadFile, folder: str) -> str:
+    """Upload file to S3 bucket with enhanced error handling"""
+    try:
+        if not file.filename:
+            raise ValueError("No filename provided")
+            
+        print(f"📸 Starting S3 upload: {file.filename}")
+        
+        # Validate file
+        if file.size and file.size > 5 * 1024 * 1024:  # 5MB limit
+            raise ValueError(f"File too large: {file.size} bytes")
+        
+        # Generate unique filename with proper extension
+        file_extension = file.filename.split('.')[-1].lower() if '.' in file.filename else 'jpg'
+        if file_extension not in ['jpg', 'jpeg', 'png', 'gif']:
+            file_extension = 'jpg'  # Default to jpg
+            
+        unique_filename = f"{folder}/{uuid.uuid4()}.{file_extension}"
+        
+        # Read file content
+        file_content = await file.read()
+        print(f"📄 File size: {len(file_content)} bytes")
+        
+        if len(file_content) == 0:
+            raise ValueError("Empty file")
+        
+        # Upload to S3
+        s3_client.put_object(
+            Bucket=S3_BUCKET,
+            Key=unique_filename,
+            Body=file_content,
+            ContentType=file.content_type or f'image/{file_extension}',
+            CacheControl='max-age=31536000',  # Cache for 1 year
+            # ACL='public-read'  # Make publicly readable
+        )
+        
+        # Generate public URL
+        url = f"https://{S3_BUCKET}.s3.{AWS_REGION}.amazonaws.com/{unique_filename}"
+        print(f"✅ S3 upload successful: {url}")
+        
+        return url
+        
+    except Exception as e:
+        print(f"❌ S3 upload error: {str(e)}")
+        print(f"❌ Error type: {type(e).__name__}")
+        import traceback
+        traceback.print_exc()
+        raise  # Re-raise the error instead of returning empty string
 
 @app.get("/items")
 async def get_items(
@@ -573,88 +1097,6 @@ async def get_items(
         import traceback
         traceback.print_exc()
         return []
-
-@app.post("/admin/login")
-async def admin_login(login_data: AdminLogin):
-    """Admin login with email/password"""
-    try:
-        print(f"🔐 Admin login attempt: {login_data.email}")
-        
-        if not admin_manager:
-            raise HTTPException(status_code=500, detail="Admin manager not initialized")
-        
-        # Authenticate admin
-        result = await admin_manager.authenticate_admin(login_data.email, login_data.password)
-        
-        if result["success"]:
-            # Generate JWT token
-            admin_data = result["admin"]
-            token = generate_token(admin_data["user_id"], is_admin=True)
-            
-            print(f"✅ Admin login successful: {admin_data['name']}")
-            return {
-                "access_token": token,
-                "user": admin_data
-            }
-        else:
-            print(f"❌ Admin login failed: {result['error']}")
-            raise HTTPException(status_code=401, detail=result["error"])
-            
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"❌ Error in admin login: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/admin/login")
-async def admin_login(login_data: AdminLogin):
-    """Admin login with email/password"""
-    try:
-        print(f"🔐 Admin login attempt: {login_data.email}")
-        
-        if not admin_manager:
-            raise HTTPException(status_code=500, detail="Admin manager not initialized")
-        
-        # Authenticate admin
-        result = await admin_manager.authenticate_admin(login_data.email, login_data.password)
-        
-        if result["success"]:
-            # Generate JWT token
-            admin_data = result["admin"]
-            token = generate_token(admin_data["user_id"], is_admin=True)
-            
-            print(f"✅ Admin login successful: {admin_data['name']}")
-            return {
-                "access_token": token,
-                "user": admin_data
-            }
-        else:
-            print(f"❌ Admin login failed: {result['error']}")
-            raise HTTPException(status_code=401, detail=result["error"])
-            
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"❌ Error in admin login: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/admin/setup/check")
-async def check_admin_setup():
-    """Check if admin setup is needed"""
-    try:
-        if admin_manager:
-            is_first_time = await admin_manager.check_first_time_setup()
-            return {
-                "first_time_setup": is_first_time,
-                "message": "Admin setup required" if is_first_time else "Admin already exists"
-            }
-        else:
-            return {"first_time_setup": True, "error": "Admin manager not initialized"}
-    except Exception as e:
-        print(f"Error checking admin setup: {e}")
-        return {"first_time_setup": True, "error": str(e)}
 
 @app.get("/items/{item_id}")
 async def get_item(item_id: str):
@@ -1951,75 +2393,6 @@ async def delete_user_permanently(
     except Exception as e:
         print(f"❌ Error deleting user: {e}")
         raise HTTPException(status_code=500, detail=str(e)) 
-    
-
-
-@app.get("/users")
-async def get_users(token_data: dict = Depends(admin_required)):
-    """Get all users (Admin only)"""
-    try:
-        print("🔍 Admin getting users...")
-        
-        if not db_pool:
-            raise HTTPException(status_code=500, detail="Database not connected")
-        
-        async with db_pool.acquire() as conn:
-            users = await conn.fetch("SELECT * FROM users WHERE email IS NOT NULL")
-        
-        user_list = []
-        for user in users:
-            user_data = {
-                "user_id": user.get("user_id"),
-                "google_id": user.get("google_id"),
-                "name": user.get("name"),
-                "email": user.get("email"),
-                "profile_picture": user.get("profile_picture"),
-                "is_active": user.get("is_active", True),
-                "created_at": user.get("created_at").isoformat() if user.get("created_at") else None,
-                "last_login": user.get("last_login").isoformat() if user.get("last_login") else None
-            }
-            user_list.append(user_data)
-            print(f"✅ Added user: {user.get('name')}")
-        
-        print(f"🎯 Returning {len(user_list)} users to admin")
-        return user_list
-        
-    except Exception as e:
-        print(f"❌ Error getting users: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-    
-
-
-@app.put("/users/{google_id}/status")
-async def update_user_status(
-    google_id: str, 
-    is_active: bool,
-    token_data: dict = Depends(admin_required)
-):
-    """Suspend/activate user account (Admin only)"""
-    try:
-        print(f"🔄 Updating user status: {google_id} -> {is_active}")
-        
-        if not db_pool:
-            raise HTTPException(status_code=500, detail="Database not connected")
-        
-        async with db_pool.acquire() as conn:
-            await conn.execute(
-                "UPDATE users SET is_active = $1 WHERE google_id = $2",
-                is_active, google_id
-            )
-        
-        print(f"✅ User status updated successfully")
-        return {"message": "User status updated successfully"}
-        
-    except Exception as e:
-        print(f"❌ Error updating user status: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-
-
-
 @app.get("/debug/users")
 async def debug_users():
     """Debug endpoint to check users in database"""
@@ -2059,15 +2432,11 @@ async def health_check():
 
 
 
-# if __name__ == "__main__":
-#     import uvicorn
-#     print("🚀 Starting local development server...")
-#     print("📍 Your app will run at: http://localhost:8000")
-#     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True) 
+# Lambda handler (for production deployment)
+handler = Mangum(app)
 
-# Update the port configuration for Render
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.getenv("PORT", 8000))  # Render provides PORT env var
-    print(f"🚀 Starting server on port {port}")
-    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False)
+    print("🚀 Starting local development server...")
+    print("📍 Your app will run at: http://localhost:8000")
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True) 
