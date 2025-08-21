@@ -7,5 +7,5 @@ PyJWT==2.8.0
 python-dotenv==1.0.0
 requests==2.31.0
 google-generativeai==0.3.2
-# Use pure Python database driver - works on any Python version
 pg8000==1.30.3
+email-validator==2.1.0
