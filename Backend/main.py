@@ -16,7 +16,6 @@ import os
 import admin_auth
 import uuid
 from typing import List, Optional
-import asyncpg
 import cloudinary
 import cloudinary.uploader
 from cloudinary.utils import cloudinary_url
