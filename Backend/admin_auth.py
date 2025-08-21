@@ -7,11 +7,11 @@ from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
 import os
 from dotenv import load_dotenv
-import psycopg2
-import psycopg2.extras
+import pg8000
 import json
 import asyncio
 import concurrent.futures
+from urllib.parse import urlparse
 
 load_dotenv()
 print(f"🔍 DEBUG - SMTP_PASSWORD from env: {os.getenv('SMTP_PASSWORD')}")
@@ -29,9 +29,18 @@ class AdminAuthManager:
         pass
         
     def get_db_connection(self):
-        """Get PostgreSQL database connection (synchronous)"""
+        """Get PostgreSQL database connection using pg8000 (pure Python)"""
         try:
-            conn = psycopg2.connect(DATABASE_URL)
+            # Parse DATABASE_URL
+            url = urlparse(DATABASE_URL)
+            
+            conn = pg8000.connect(
+                host=url.hostname,
+                port=url.port or 5432,
+                user=url.username,
+                password=url.password,
+                database=url.path[1:] if url.path else None  # Remove leading '/'
+            )
             return conn
         except Exception as e:
             print(f"❌ Database connection error: {e}")
@@ -69,7 +78,7 @@ class AdminAuthManager:
         try:
             conn = self.get_db_connection()
             try:
-                cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+                cursor = conn.cursor()
                 cursor.execute(
                     "SELECT * FROM app_settings WHERE setting_key = %s",
                     ("admin_profile",)
@@ -144,7 +153,7 @@ class AdminAuthManager:
         try:
             conn = self.get_db_connection()
             try:
-                cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+                cursor = conn.cursor()
                 # Get admin record
                 cursor.execute(
                     "SELECT * FROM app_settings WHERE setting_key = %s",
@@ -155,7 +164,8 @@ class AdminAuthManager:
                 if not admin_row:
                     return {"success": False, "error": "Admin not found"}
                 
-                admin = json.loads(admin_row["setting_value"])
+                # pg8000 returns tuples, so we need to map to dict
+                admin = json.loads(admin_row[1])  # setting_value is at index 1
                 
                 # Check email and password
                 if admin.get("email") != email:
@@ -201,7 +211,7 @@ class AdminAuthManager:
         try:
             conn = self.get_db_connection()
             try:
-                cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+                cursor = conn.cursor()
                 # Get current admin
                 cursor.execute(
                     "SELECT * FROM app_settings WHERE setting_key = %s",
@@ -212,7 +222,7 @@ class AdminAuthManager:
                 if not admin_row:
                     return {"success": False, "error": "Admin not found"}
                 
-                admin = json.loads(admin_row["setting_value"])
+                admin = json.loads(admin_row[1])  # setting_value is at index 1
                 
                 # Verify current email
                 if admin.get("email") != current_email:
@@ -268,7 +278,7 @@ class AdminAuthManager:
         try:
             conn = self.get_db_connection()
             try:
-                cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+                cursor = conn.cursor()
                 # Get admin record first
                 cursor.execute(
                     "SELECT * FROM app_settings WHERE setting_key = %s",
@@ -280,7 +290,7 @@ class AdminAuthManager:
                     print(f"❌ Admin account not found in database")
                     return {"success": False, "error": "Admin not found"}
                 
-                admin = json.loads(admin_row["setting_value"])
+                admin = json.loads(admin_row[1])  # setting_value is at index 1
                 admin_email = admin.get("email")
                 
                 # SECURITY CHECK: Only allow reset for the actual admin email
@@ -328,7 +338,7 @@ class AdminAuthManager:
         try:
             conn = self.get_db_connection()
             try:
-                cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+                cursor = conn.cursor()
                 # Get admin record
                 cursor.execute(
                     "SELECT * FROM app_settings WHERE setting_key = %s",
@@ -339,7 +349,7 @@ class AdminAuthManager:
                 if not admin_row:
                     return {"success": False, "error": "Admin not found"}
                 
-                admin = json.loads(admin_row["setting_value"])
+                admin = json.loads(admin_row[1])  # setting_value is at index 1
                 
                 # Check token
                 if admin.get("reset_token") != token:
