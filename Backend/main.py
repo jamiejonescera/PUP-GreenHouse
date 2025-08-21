@@ -297,7 +297,7 @@ async def create_tables_if_not_exist(conn):
 # Initialize admin manager with PostgreSQL
 try:
     from admin_auth import AdminAuthManager
-    admin_manager = AdminAuthManager(None)  # Will be updated to use PostgreSQL
+    admin_manager = AdminAuthManager
     print("✅ Admin manager initialized successfully")
 except ImportError:
     print("⚠️ admin_auth.py not found - admin features will not work")
