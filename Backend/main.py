@@ -36,10 +36,14 @@ CORS_ORIGINS = os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=CORS_ORIGINS,
+    allow_origins=[
+        "http://localhost:3000",  # Local development
+        "https://thegreenhouse-project.netlify.app",  # Your Netlify frontend
+        "https://pup-greenhouse.onrender.com"  # Your backend (for docs)
+    ],
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["*"],  # Allow all HTTP methods
+    allow_headers=["*"],  # Allow all headers
 )
 # Database Configuration
 DATABASE_URL = os.getenv("DATABASE_URL")
