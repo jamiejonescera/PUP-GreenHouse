@@ -5,10 +5,10 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart  
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
-import boto3
-from botocore.exceptions import ClientError
 import os
 from dotenv import load_dotenv
+import asyncpg
+import json
 
 load_dotenv()
 print(f"🔍 DEBUG - SMTP_PASSWORD from env: {os.getenv('SMTP_PASSWORD')}")
@@ -17,11 +17,22 @@ print(f"🔍 DEBUG - SMTP_PASSWORD from env: {os.getenv('SMTP_PASSWORD')}")
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 587
 SMTP_USERNAME = os.getenv("SMTP_USERNAME")
-SMTP_PASSWORD = os.getenv("SMTP_PASSWORD") 
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 class AdminAuthManager:
-    def __init__(self, dynamodb_table):
-        self.table = dynamodb_table
+    def __init__(self, dynamodb_table=None):
+        # dynamodb_table parameter kept for compatibility but not used
+        pass
+        
+    async def get_db_connection(self):
+        """Get PostgreSQL database connection"""
+        try:
+            conn = await asyncpg.connect(DATABASE_URL)
+            return conn
+        except Exception as e:
+            print(f"❌ Database connection error: {e}")
+            raise
         
     def hash_password(self, password: str) -> str:
         """Hash password with salt"""
@@ -37,22 +48,70 @@ class AdminAuthManager:
         except:
             return False
     
-    def check_first_time_setup(self) -> bool:
+    async def check_first_time_setup(self) -> bool:
         """Check if admin setup is needed (no admin exists)"""
         try:
-            response = self.table.get_item(
-                Key={"user_id": "ADMIN", "item_id": "PROFILE"}
-            )
-            return "Item" not in response
+            conn = await self.get_db_connection()
+            try:
+                admin_row = await conn.fetchrow("""
+                    SELECT * FROM app_settings 
+                    WHERE setting_key = $1
+                """, "admin_profile")
+                
+                return admin_row is None
+            finally:
+                await conn.close()
         except Exception as e:
             print(f"Error checking first-time setup: {e}")
             return True  # Assume first time if error
     
-    def create_admin(self, name: str, email: str, password: str) -> Dict[str, Any]:
-        """Create the first admin account"""
+    def check_first_time_setup(self) -> bool:
+        """Synchronous wrapper for async method"""
+        import asyncio
+        try:
+            # Try to get the current event loop
+            loop = asyncio.get_running_loop()
+            # If we're in an event loop, create a task
+            import concurrent.futures
+            import threading
+            
+            def run_in_thread():
+                new_loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(new_loop)
+                try:
+                    return new_loop.run_until_complete(self.check_first_time_setup_async())
+                finally:
+                    new_loop.close()
+            
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(run_in_thread)
+                return future.result()
+        except RuntimeError:
+            # No event loop running, safe to use asyncio.run
+            return asyncio.run(self.check_first_time_setup_async())
+    
+    async def check_first_time_setup_async(self) -> bool:
+        """Check if admin setup is needed (no admin exists) - async version"""
+        try:
+            conn = await self.get_db_connection()
+            try:
+                admin_row = await conn.fetchrow("""
+                    SELECT * FROM app_settings 
+                    WHERE setting_key = $1
+                """, "admin_profile")
+                
+                return admin_row is None
+            finally:
+                await conn.close()
+        except Exception as e:
+            print(f"Error checking first-time setup: {e}")
+            return True  # Assume first time if error
+    
+    async def create_admin_async(self, name: str, email: str, password: str) -> Dict[str, Any]:
+        """Create the first admin account - async version"""
         try:
             # Check if admin already exists
-            if not self.check_first_time_setup():
+            if not await self.check_first_time_setup_async():
                 return {"success": False, "error": "Admin already exists"}
             
             # Hash password
@@ -60,8 +119,6 @@ class AdminAuthManager:
             
             # Create admin record
             admin_data = {
-                "user_id": "ADMIN",
-                "item_id": "PROFILE",
                 "name": name,
                 "email": email,
                 "password_hash": password_hash,
@@ -72,7 +129,20 @@ class AdminAuthManager:
                 "reset_expires": None
             }
             
-            self.table.put_item(Item=admin_data)
+            conn = await self.get_db_connection()
+            try:
+                # Store admin profile in app_settings table
+                await conn.execute("""
+                    INSERT INTO app_settings (setting_key, setting_value, updated_at, updated_by)
+                    VALUES ($1, $2, $3, $4)
+                """,
+                "admin_profile",
+                json.dumps(admin_data),
+                datetime.utcnow(),
+                "system"
+                )
+            finally:
+                await conn.close()
             
             return {
                 "success": True,
@@ -87,107 +157,159 @@ class AdminAuthManager:
             print(f"Error creating admin: {e}")
             return {"success": False, "error": str(e)}
     
-    def authenticate_admin(self, email: str, password: str) -> Dict[str, Any]:
-        """Authenticate admin login"""
+    def create_admin(self, name: str, email: str, password: str) -> Dict[str, Any]:
+        """Synchronous wrapper for create_admin_async"""
+        import asyncio
+        import concurrent.futures
+        import threading
+        
+        def run_in_thread():
+            new_loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(new_loop)
+            try:
+                return new_loop.run_until_complete(self.create_admin_async(name, email, password))
+            finally:
+                new_loop.close()
+        
         try:
-            # Get admin record
-            response = self.table.get_item(
-                Key={"user_id": "ADMIN", "item_id": "PROFILE"}
-            )
-            
-            if "Item" not in response:
-                return {"success": False, "error": "Admin not found"}
-            
-            admin = response["Item"]
-            
-            # Check email and password
-            if admin.get("email") != email:
-                return {"success": False, "error": "Invalid credentials"}
-            
-            if not self.verify_password(password, admin.get("password_hash", "")):
-                return {"success": False, "error": "Invalid credentials"}
-            
-            # Update last login
-            self.table.update_item(
-                Key={"user_id": "ADMIN", "item_id": "PROFILE"},
-                UpdateExpression="SET last_login = :timestamp",
-                ExpressionAttributeValues={":timestamp": datetime.utcnow().isoformat()}
-            )
-            
-            return {
-                "success": True,
-                "admin": {
-                    "user_id": "ADMIN",
-                    "name": admin.get("name"),
-                    "email": admin.get("email"),
-                    "is_admin": True
+            # Check if we're in an event loop
+            loop = asyncio.get_running_loop()
+            # If yes, run in separate thread
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(run_in_thread)
+                return future.result()
+        except RuntimeError:
+            # No event loop, safe to use asyncio.run
+            return asyncio.run(self.create_admin_async(name, email, password))
+    
+    async def authenticate_admin_async(self, email: str, password: str) -> Dict[str, Any]:
+        """Authenticate admin login - async version"""
+        try:
+            conn = await self.get_db_connection()
+            try:
+                # Get admin record
+                admin_row = await conn.fetchrow("""
+                    SELECT * FROM app_settings 
+                    WHERE setting_key = $1
+                """, "admin_profile")
+                
+                if not admin_row:
+                    return {"success": False, "error": "Admin not found"}
+                
+                admin = json.loads(admin_row["setting_value"])
+                
+                # Check email and password
+                if admin.get("email") != email:
+                    return {"success": False, "error": "Invalid credentials"}
+                
+                if not self.verify_password(password, admin.get("password_hash", "")):
+                    return {"success": False, "error": "Invalid credentials"}
+                
+                # Update last login
+                admin["last_login"] = datetime.utcnow().isoformat()
+                
+                await conn.execute("""
+                    UPDATE app_settings 
+                    SET setting_value = $1, updated_at = $2 
+                    WHERE setting_key = $3
+                """,
+                json.dumps(admin),
+                datetime.utcnow(),
+                "admin_profile"
+                )
+                
+                return {
+                    "success": True,
+                    "admin": {
+                        "user_id": "ADMIN",
+                        "name": admin.get("name"),
+                        "email": admin.get("email"),
+                        "is_admin": True
+                    }
                 }
-            }
+            finally:
+                await conn.close()
             
         except Exception as e:
             print(f"Error authenticating admin: {e}")
             return {"success": False, "error": str(e)}
     
-    def update_admin_profile(self, current_email: str, new_name: str = None, new_email: str = None, new_password: str = None) -> Dict[str, Any]:
-        """Update admin profile"""
+    def authenticate_admin(self, email: str, password: str) -> Dict[str, Any]:
+        """Synchronous wrapper for authenticate_admin_async"""
+        import asyncio
+        import concurrent.futures
+        
+        def run_in_thread():
+            new_loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(new_loop)
+            try:
+                return new_loop.run_until_complete(self.authenticate_admin_async(email, password))
+            finally:
+                new_loop.close()
+        
         try:
-            # Get current admin
-            response = self.table.get_item(
-                Key={"user_id": "ADMIN", "item_id": "PROFILE"}
-            )
-            
-            if "Item" not in response:
-                return {"success": False, "error": "Admin not found"}
-            
-            admin = response["Item"]
-            
-            # Verify current email
-            if admin.get("email") != current_email:
-                return {"success": False, "error": "Current email doesn't match"}
-            
-            # Prepare update - FIXED VERSION
-            update_expression = "SET updated_at = :timestamp"
-            expression_values = {":timestamp": datetime.utcnow().isoformat()}
-            expression_names = {}  # Add this for reserved words
+            loop = asyncio.get_running_loop()
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(run_in_thread)
+                return future.result()
+        except RuntimeError:
+            return asyncio.run(self.authenticate_admin_async(email, password))
+    
+    async def update_admin_profile_async(self, current_email: str, new_name: str = None, new_email: str = None, new_password: str = None) -> Dict[str, Any]:
+        """Update admin profile - async version"""
+        try:
+            conn = await self.get_db_connection()
+            try:
+                # Get current admin
+                admin_row = await conn.fetchrow("""
+                    SELECT * FROM app_settings 
+                    WHERE setting_key = $1
+                """, "admin_profile")
                 
-            if new_name and new_name.strip():
-                update_expression += ", #name = :name"
-                expression_values[":name"] = new_name.strip()
-                expression_names["#name"] = "name"  # 'name' is reserved in DynamoDB
-            
-            if new_email and new_email.strip():
-                update_expression += ", email = :email"
-                expression_values[":email"] = new_email.strip()
-            
-            if new_password and new_password.strip():
-                password_hash = self.hash_password(new_password)
-                update_expression += ", password_hash = :password_hash"
-                expression_values[":password_hash"] = password_hash
-            
-            print(f"🔄 Updating admin profile: {update_expression}")
-            print(f"📝 Values: {expression_values}")
-            
-            # Update admin record - FIXED
-            update_params = {
-                "Key": {"user_id": "ADMIN", "item_id": "PROFILE"},
-                "UpdateExpression": update_expression,
-                "ExpressionAttributeValues": expression_values
-            }
-            
-            # Only add ExpressionAttributeNames if we have reserved words
-            if expression_names:
-                update_params["ExpressionAttributeNames"] = expression_names
-            
-            self.table.update_item(**update_params)
-            
-            return {
-                "success": True,
-                "message": "Admin profile updated successfully",
-                "admin": {
-                    "name": new_name or admin.get("name"),
-                    "email": new_email or admin.get("email")
+                if not admin_row:
+                    return {"success": False, "error": "Admin not found"}
+                
+                admin = json.loads(admin_row["setting_value"])
+                
+                # Verify current email
+                if admin.get("email") != current_email:
+                    return {"success": False, "error": "Current email doesn't match"}
+                
+                # Update fields
+                if new_name and new_name.strip():
+                    admin["name"] = new_name.strip()
+                
+                if new_email and new_email.strip():
+                    admin["email"] = new_email.strip()
+                
+                if new_password and new_password.strip():
+                    admin["password_hash"] = self.hash_password(new_password)
+                
+                admin["updated_at"] = datetime.utcnow().isoformat()
+                
+                print(f"🔄 Updating admin profile")
+                
+                # Update admin record
+                await conn.execute("""
+                    UPDATE app_settings 
+                    SET setting_value = $1, updated_at = $2 
+                    WHERE setting_key = $3
+                """,
+                json.dumps(admin),
+                datetime.utcnow(),
+                "admin_profile"
+                )
+                
+                return {
+                    "success": True,
+                    "message": "Admin profile updated successfully",
+                    "admin": {
+                        "name": admin.get("name"),
+                        "email": admin.get("email")
+                    }
                 }
-            }
+            finally:
+                await conn.close()
             
         except Exception as e:
             print(f"❌ Error updating admin profile: {e}")
@@ -195,97 +317,178 @@ class AdminAuthManager:
             traceback.print_exc()
             return {"success": False, "error": str(e)}
     
-    def generate_reset_token(self, email: str) -> Dict[str, Any]:
-        """Generate password reset token - SECURE VERSION"""
+    def update_admin_profile(self, current_email: str, new_name: str = None, new_email: str = None, new_password: str = None) -> Dict[str, Any]:
+        """Synchronous wrapper for update_admin_profile_async"""
+        import asyncio
+        import concurrent.futures
+        
+        def run_in_thread():
+            new_loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(new_loop)
+            try:
+                return new_loop.run_until_complete(self.update_admin_profile_async(current_email, new_name, new_email, new_password))
+            finally:
+                new_loop.close()
+        
         try:
-            # Get admin record first
-            response = self.table.get_item(
-                Key={"user_id": "ADMIN", "item_id": "PROFILE"}
-            )
-            
-            if "Item" not in response:
-                print(f"❌ Admin account not found in database")
-                return {"success": False, "error": "Admin not found"}
-            
-            admin = response["Item"]
-            admin_email = admin.get("email")
-            
-            # SECURITY CHECK: Only allow reset for the actual admin email
-            if admin_email != email:
-                print(f"🚨 Security blocked: Attempted reset for '{email}' but admin email is '{admin_email}'")
-                # Return generic error message to prevent email enumeration
-                return {"success": False, "error": "Email must match admin email for reset"}
-            
-            print(f"✅ Email verification passed: {email} matches admin email")
-            
-            # Generate reset token
-            reset_token = secrets.token_urlsafe(32)
-            reset_expires = (datetime.utcnow() + timedelta(hours=1)).isoformat()
-            
-            # Save reset token
-            self.table.update_item(
-                Key={"user_id": "ADMIN", "item_id": "PROFILE"},
-                UpdateExpression="SET reset_token = :token, reset_expires = :expires",
-                ExpressionAttributeValues={
-                    ":token": reset_token,
-                    ":expires": reset_expires
+            loop = asyncio.get_running_loop()
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(run_in_thread)
+                return future.result()
+        except RuntimeError:
+            return asyncio.run(self.update_admin_profile_async(current_email, new_name, new_email, new_password))
+    
+    async def generate_reset_token_async(self, email: str) -> Dict[str, Any]:
+        """Generate password reset token - SECURE VERSION - async"""
+        try:
+            conn = await self.get_db_connection()
+            try:
+                # Get admin record first
+                admin_row = await conn.fetchrow("""
+                    SELECT * FROM app_settings 
+                    WHERE setting_key = $1
+                """, "admin_profile")
+                
+                if not admin_row:
+                    print(f"❌ Admin account not found in database")
+                    return {"success": False, "error": "Admin not found"}
+                
+                admin = json.loads(admin_row["setting_value"])
+                admin_email = admin.get("email")
+                
+                # SECURITY CHECK: Only allow reset for the actual admin email
+                if admin_email != email:
+                    print(f"🚨 Security blocked: Attempted reset for '{email}' but admin email is '{admin_email}'")
+                    return {"success": False, "error": "Email must match admin email for reset"}
+                
+                print(f"✅ Email verification passed: {email} matches admin email")
+                
+                # Generate reset token
+                reset_token = secrets.token_urlsafe(32)
+                reset_expires = (datetime.utcnow() + timedelta(hours=1)).isoformat()
+                
+                # Save reset token
+                admin["reset_token"] = reset_token
+                admin["reset_expires"] = reset_expires
+                
+                await conn.execute("""
+                    UPDATE app_settings 
+                    SET setting_value = $1, updated_at = $2 
+                    WHERE setting_key = $3
+                """,
+                json.dumps(admin),
+                datetime.utcnow(),
+                "admin_profile"
+                )
+                
+                return {
+                    "success": True,
+                    "reset_token": reset_token,
+                    "admin_name": admin.get("name", "Admin")
                 }
-            )
-            
-            return {
-                "success": True,
-                "reset_token": reset_token,
-                "admin_name": admin.get("name", "Admin")
-            }
+            finally:
+                await conn.close()
             
         except Exception as e:
             print(f"Error generating reset token: {e}")
             return {"success": False, "error": "An error occurred. Please try again."}
     
-    def reset_password(self, token: str, new_password: str) -> Dict[str, Any]:
-        """Reset password with token"""
+    def generate_reset_token(self, email: str) -> Dict[str, Any]:
+        """Synchronous wrapper for generate_reset_token_async"""
+        import asyncio
+        import concurrent.futures
+        
+        def run_in_thread():
+            new_loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(new_loop)
+            try:
+                return new_loop.run_until_complete(self.generate_reset_token_async(email))
+            finally:
+                new_loop.close()
+        
         try:
-            # Get admin record
-            response = self.table.get_item(
-                Key={"user_id": "ADMIN", "item_id": "PROFILE"}
-            )
-            
-            if "Item" not in response:
-                return {"success": False, "error": "Admin not found"}
-            
-            admin = response["Item"]
-            
-            # Check token
-            if admin.get("reset_token") != token:
-                return {"success": False, "error": "Invalid reset token"}
-            
-            # Check expiration
-            reset_expires = admin.get("reset_expires")
-            if not reset_expires or datetime.fromisoformat(reset_expires) < datetime.utcnow():
-                return {"success": False, "error": "Reset token expired"}
-            
-            # Hash new password
-            password_hash = self.hash_password(new_password)
-            
-            # Update password and clear reset token
-            self.table.update_item(
-                Key={"user_id": "ADMIN", "item_id": "PROFILE"},
-                UpdateExpression="SET password_hash = :password, reset_token = :null, reset_expires = :null, updated_at = :timestamp",
-                ExpressionAttributeValues={
-                    ":password": password_hash,
-                    ":null": None,
-                    ":timestamp": datetime.utcnow().isoformat()
+            loop = asyncio.get_running_loop()
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(run_in_thread)
+                return future.result()
+        except RuntimeError:
+            return asyncio.run(self.generate_reset_token_async(email))
+    
+    async def reset_password_async(self, token: str, new_password: str) -> Dict[str, Any]:
+        """Reset password with token - async version"""
+        try:
+            conn = await self.get_db_connection()
+            try:
+                # Get admin record
+                admin_row = await conn.fetchrow("""
+                    SELECT * FROM app_settings 
+                    WHERE setting_key = $1
+                """, "admin_profile")
+                
+                if not admin_row:
+                    return {"success": False, "error": "Admin not found"}
+                
+                admin = json.loads(admin_row["setting_value"])
+                
+                # Check token
+                if admin.get("reset_token") != token:
+                    return {"success": False, "error": "Invalid reset token"}
+                
+                # Check expiration
+                reset_expires = admin.get("reset_expires")
+                if not reset_expires or datetime.fromisoformat(reset_expires) < datetime.utcnow():
+                    return {"success": False, "error": "Reset token expired"}
+                
+                # Hash new password
+                admin["password_hash"] = self.hash_password(new_password)
+                
+                # Clear reset token
+                admin["reset_token"] = None
+                admin["reset_expires"] = None
+                admin["updated_at"] = datetime.utcnow().isoformat()
+                
+                # Update password and clear reset token
+                await conn.execute("""
+                    UPDATE app_settings 
+                    SET setting_value = $1, updated_at = $2 
+                    WHERE setting_key = $3
+                """,
+                json.dumps(admin),
+                datetime.utcnow(),
+                "admin_profile"
+                )
+                
+                return {
+                    "success": True,
+                    "message": "Password reset successfully"
                 }
-            )
-            
-            return {
-                "success": True,
-                "message": "Password reset successfully"
-            }
+            finally:
+                await conn.close()
             
         except Exception as e:
             print(f"Error resetting password: {e}")
             return {"success": False, "error": str(e)}
+    
+    def reset_password(self, token: str, new_password: str) -> Dict[str, Any]:
+        """Synchronous wrapper for reset_password_async"""
+        import asyncio
+        import concurrent.futures
+        
+        def run_in_thread():
+            new_loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(new_loop)
+            try:
+                return new_loop.run_until_complete(self.reset_password_async(token, new_password))
+            finally:
+                new_loop.close()
+        
+        try:
+            loop = asyncio.get_running_loop()
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(run_in_thread)
+                return future.result()
+        except RuntimeError:
+            return asyncio.run(self.reset_password_async(token, new_password))
     
     def send_reset_email(self, email: str, reset_token: str, admin_name: str) -> bool:
         """Send password reset email with environment-aware reset link"""
