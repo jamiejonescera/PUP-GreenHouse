@@ -24,10 +24,6 @@ SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 class AdminAuthManager:
-    def __init__(self, dynamodb_table=None):
-        # dynamodb_table parameter kept for compatibility but not used
-        pass
-        
     def get_db_connection(self):
         """Get PostgreSQL database connection using pg8000 (pure Python)"""
         try:
@@ -39,7 +35,8 @@ class AdminAuthManager:
                 port=url.port or 5432,
                 user=url.username,
                 password=url.password,
-                database=url.path[1:] if url.path else None  # Remove leading '/'
+                database=url.path[1:] if url.path else None,  # Remove leading '/'
+                ssl_context=True  # Add SSL support for Render
             )
             return conn
         except Exception as e:
