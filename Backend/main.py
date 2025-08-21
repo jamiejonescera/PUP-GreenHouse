@@ -17,6 +17,8 @@ import google.generativeai as genai
 import os
 import uuid
 from pathlib import Path
+import psycopg2
+from psycopg2.extras import RealDictCursor
 
 # Load environment variables
 load_dotenv()
