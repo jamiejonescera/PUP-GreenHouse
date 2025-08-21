@@ -29,18 +29,19 @@ load_dotenv()
 # Initialize FastAPI app
 app = FastAPI(title="Eco Pantry API", version="1.0.0")
 
-# CORS middleware
+# Render deployment configuration
+PORT = int(os.getenv("PORT", 8000))
+
+# CORS middleware - Environment aware
+CORS_ORIGINS = os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "https://thegreenhouse-project.netlify.app"
-    ],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 # Database Configuration
 DATABASE_URL = os.getenv("DATABASE_URL")
 
@@ -2274,6 +2275,6 @@ async def startup_event():
 
 if __name__ == "__main__":
     import uvicorn
-    print("🚀 Starting local development server...")
-    print("🌐 Your app will run at: http://localhost:8000")
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    print("🚀 Starting server...")
+    print(f"🌐 Server will run on port: {PORT}")
+    uvicorn.run("main:app", host="0.0.0.0", port=PORT, reload=False)
